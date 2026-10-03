@@ -4,6 +4,7 @@ warnings.filterwarnings('ignore')
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -176,6 +177,174 @@ def event_adjustment(future, events):
             out.at[i,"event_impact_pct"] = hit.impact_pct.sum()
             out.at[i,"event_name"] = ", ".join(hit.event_name.astype(str).tolist())
     return out
+
+
+# ----------------------------- Click Effects (Originkit) -----------------------------
+def render_click_effects(interaction_mode="sniper", color="#00b4d8"):
+    if interaction_mode == "none":
+        return
+    html_content = f"""
+    <script>
+    (function() {{
+        try {{
+            var doc = window.parent.document || document;
+            var win = window.parent || window;
+            
+            var existingContainer = doc.getElementById('originkit-click-effects');
+            if (existingContainer) existingContainer.remove();
+            
+            var container = doc.createElement('div');
+            container.id = 'originkit-click-effects';
+            container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:999999;overflow:hidden;';
+            doc.body.appendChild(container);
+            
+            var mode = "{interaction_mode}";
+            var color = "{color}";
+            var effectSize = 88;
+            var duration = 0.35;
+
+            var styleTag = doc.getElementById('originkit-click-style');
+            if (!styleTag) {{
+                styleTag = doc.createElement('style');
+                styleTag.id = 'originkit-click-style';
+                styleTag.innerHTML = `
+                    @keyframes originkit-ring {{
+                        0% {{ transform: scale(0.4); opacity: 1; stroke-width: 3px; }}
+                        70% {{ opacity: 0.9; }}
+                        100% {{ transform: scale(2.2); opacity: 0; stroke-width: 0.5px; }}
+                    }}
+                `;
+                doc.head.appendChild(styleTag);
+            }}
+
+            function triggerEffect(e) {{
+                if (mode === 'none') return;
+                var x = e.clientX;
+                var y = e.clientY;
+                if (!x && !y) return;
+                
+                if (mode === 'rings') {{
+                    var svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    svg.style.cssText = 'position:absolute;left:' + (x - effectSize/2) + 'px;top:' + (y - effectSize/2) + 'px;width:' + effectSize + 'px;height:' + effectSize + 'px;pointer-events:none;overflow:visible;';
+                    svg.innerHTML = '<circle cx="' + (effectSize/2) + '" cy="' + (effectSize/2) + '" r="' + (effectSize/4) + '" fill="none" stroke="' + color + '" stroke-width="3" style="transform-origin:center;animation:originkit-ring ' + duration + 's cubic-bezier(0.1, 0.8, 0.3, 1) forwards;"/>';
+                    container.appendChild(svg);
+                    setTimeout(function() {{ svg.remove(); }}, duration * 1000 + 40);
+                }}
+                else if (mode === 'particles') {{
+                    var count = 8;
+                    for (var i = 0; i < count; i++) {{
+                        (function(idx) {{
+                            var ang = idx * 45 * (Math.PI / 180);
+                            var dist = effectSize * 0.28 + Math.random() * (effectSize * 0.25);
+                            var dot = doc.createElement('div');
+                            dot.style.cssText = 'position:absolute;left:' + x + 'px;top:' + y + 'px;width:5px;height:5px;background:' + color + ';border-radius:50%;pointer-events:none;transform:translate(-50%,-50%);transition:all ' + duration + 's cubic-bezier(0.1, 0.8, 0.3, 1);box-shadow:0 0 6px ' + color + ';';
+                            container.appendChild(dot);
+                            requestAnimationFrame(function() {{
+                                dot.style.left = (x + Math.cos(ang) * dist) + 'px';
+                                dot.style.top = (y + Math.sin(ang) * dist) + 'px';
+                                dot.style.opacity = '0';
+                                dot.style.transform = 'translate(-50%,-50%) scale(0.2)';
+                            }});
+                            setTimeout(function() {{ dot.remove(); }}, duration * 1000 + 40);
+                        }})(i);
+                    }}
+                }}
+                else if (mode === 'sniper') {{
+                    var wrap = doc.createElement('div');
+                    wrap.style.cssText = 'position:absolute;left:' + x + 'px;top:' + y + 'px;pointer-events:none;';
+                    
+                    var angles = [0, Math.PI/2, Math.PI, 3*Math.PI/2];
+                    angles.forEach(function(ang) {{
+                        var line = doc.createElement('div');
+                        var len = effectSize * 0.18;
+                        line.style.cssText = 'position:absolute;left:0;top:0;width:' + len + 'px;height:2px;background:' + color + ';transform-origin:0 50%;transform:rotate(' + ang + 'rad) translateX(8px);transition:all ' + duration + 's ease-out;box-shadow:0 0 5px ' + color + ';';
+                        wrap.appendChild(line);
+                        requestAnimationFrame(function() {{
+                            line.style.transform = 'rotate(' + ang + 'rad) translateX(' + (len + 15) + 'px)';
+                            line.style.opacity = '0';
+                        }});
+                    }});
+                    
+                    var sparkAngles = [Math.PI/3, 2*Math.PI/3, 4*Math.PI/3, 5*Math.PI/3, Math.PI/6, 5*Math.PI/6, 7*Math.PI/6, 11*Math.PI/6];
+                    sparkAngles.forEach(function(ang) {{
+                        var spark = doc.createElement('div');
+                        var dist = effectSize * 0.38;
+                        spark.style.cssText = 'position:absolute;left:0;top:0;width:3px;height:3px;background:' + color + ';border-radius:50%;transform:translate(-50%,-50%);transition:all ' + duration + 's ease-out;box-shadow:0 0 5px ' + color + ';';
+                        wrap.appendChild(spark);
+                        requestAnimationFrame(function() {{
+                            spark.style.transform = 'translate(' + (Math.cos(ang)*dist) + 'px, ' + (Math.sin(ang)*dist) + 'px) scale(0)';
+                            spark.style.opacity = '0';
+                        }});
+                    }});
+                    
+                    container.appendChild(wrap);
+                    setTimeout(function() {{ wrap.remove(); }}, duration * 1000 + 40);
+                }}
+                else if (mode === 'crosshair') {{
+                    var wrap = doc.createElement('div');
+                    wrap.style.cssText = 'position:absolute;left:' + x + 'px;top:' + y + 'px;pointer-events:none;';
+                    [0, Math.PI/2, Math.PI, 3*Math.PI/2].forEach(function(ang) {{
+                        var line = doc.createElement('div');
+                        var len = effectSize * 0.28;
+                        line.style.cssText = 'position:absolute;left:0;top:0;width:' + len + 'px;height:2px;background:' + color + ';transform-origin:0 50%;transform:rotate(' + ang + 'rad) translateX(12px);transition:all ' + duration + 's ease-out;box-shadow:0 0 6px ' + color + ';';
+                        wrap.appendChild(line);
+                        requestAnimationFrame(function() {{
+                            line.style.transform = 'rotate(' + ang + 'rad) translateX(' + (len + 25) + 'px)';
+                            line.style.opacity = '0';
+                        }});
+                    }});
+                    container.appendChild(wrap);
+                    setTimeout(function() {{ wrap.remove(); }}, duration * 1000 + 40);
+                }}
+                else if (mode === 'burst') {{
+                    var wrap = doc.createElement('div');
+                    wrap.style.cssText = 'position:absolute;left:' + x + 'px;top:' + y + 'px;pointer-events:none;';
+                    [45, 80, 115, 150].forEach(function(deg) {{
+                        var ang = deg * Math.PI / 180;
+                        var line = doc.createElement('div');
+                        var len = effectSize * 0.22;
+                        line.style.cssText = 'position:absolute;left:0;top:0;width:' + len + 'px;height:2px;background:' + color + ';transform-origin:0 50%;transform:rotate(' + ang + 'rad) translateX(6px);transition:all ' + duration + 's ease-out;box-shadow:0 0 5px ' + color + ';';
+                        wrap.appendChild(line);
+                        requestAnimationFrame(function() {{
+                            line.style.transform = 'rotate(' + ang + 'rad) translateX(' + (len + 20) + 'px)';
+                            line.style.opacity = '0';
+                        }});
+                    }});
+                    container.appendChild(wrap);
+                    setTimeout(function() {{ wrap.remove(); }}, duration * 1000 + 40);
+                }}
+                else if (mode === 'wavy') {{
+                    var count = 4;
+                    for (var i = 0; i < count; i++) {{
+                        (function(idx) {{
+                            var ang = (idx * 90 + 45) * (Math.PI / 180);
+                            var dist = effectSize * 0.45;
+                            var spark = doc.createElement('div');
+                            spark.style.cssText = 'position:absolute;left:' + x + 'px;top:' + y + 'px;width:4px;height:4px;background:' + color + ';border-radius:50%;transform:translate(-50%,-50%);transition:all ' + duration + 's cubic-bezier(0.2, 0.8, 0.4, 1);box-shadow:0 0 8px ' + color + ';';
+                            container.appendChild(spark);
+                            requestAnimationFrame(function() {{
+                                spark.style.left = (x + Math.cos(ang) * dist) + 'px';
+                                spark.style.top = (y + Math.sin(ang) * dist) + 'px';
+                                spark.style.opacity = '0';
+                            }});
+                            setTimeout(function() {{ spark.remove(); }}, duration * 1000 + 40);
+                        }})(i);
+                    }}
+                }}
+            }}
+            
+            if (win._originkitClickFn) {{
+                doc.removeEventListener('click', win._originkitClickFn);
+            }}
+            win._originkitClickFn = triggerEffect;
+            doc.addEventListener('click', triggerEffect);
+        }} catch(err) {{
+            console.error('Click effects error:', err);
+        }}
+    }})();
+    </script>
+    """
+    components.html(html_content, height=0, width=0)
 
 
 # ----------------------------- Station Recommendation Logic -----------------------------
@@ -531,7 +700,25 @@ with st.sidebar:
     chosen = st.date_input("Date", value=pd.Timestamp.today().date()) if forecast_mode=="Choose date" else pd.Timestamp.today().date()
     blend = st.slider("XGBoost weight", 0.0, 1.0, 0.60, 0.05)
     st.caption("⚡ Models are cached after first training. Forecast requests use fast inference.")
+    with st.expander("✨ Click Effects (Originkit)", expanded=False):
+        fx_mode = st.selectbox(
+            "Effect Style",
+            ["sniper", "rings", "particles", "crosshair", "burst", "wavy", "none"],
+            index=0,
+            format_func=lambda x: {
+                "sniper": "🎯 Sniper / Spark (Default)",
+                "rings": "⭕ Energy Rings",
+                "particles": "✨ Particles",
+                "crosshair": "➕ Crosshair",
+                "burst": "💥 Burst",
+                "wavy": "〰️ Wavy Arc",
+                "none": "Off"
+            }.get(x, x)
+        )
+        fx_color = st.color_picker("Effect Color", "#00b4d8")
     run = st.button("🚀 Run / Refresh Forecast", type="primary", use_container_width=True)
+
+render_click_effects(fx_mode, fx_color)
 
 hourly = read_csv(hourly_up, DEFAULT_HOURLY)
 stations = read_csv(station_up, DEFAULT_STATIONS)
