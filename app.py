@@ -717,9 +717,31 @@ with tab1:
             )
 
     # ============================================================
+    # ALTERNATIVE STATIONS (Rank #2 & #3)
+    # ============================================================
+    if len(recommendations) > 1:
+        st.markdown("### 🔄 Alternative Stations")
+        alternatives = recommendations.iloc[1:3]
+        badges = ["🥈 Alternative", "🥉 Other Option"]
+        alt_cols = st.columns(len(alternatives))
+        for i, (col, (_, alt_st)) in enumerate(zip(alt_cols, alternatives.iterrows())):
+            badge = badges[i] if i < len(badges) else f"Option #{i+2}"
+            with col:
+                st.info(
+                    f"""
+                    {badge}: **{alt_st['station_id']}** — {alt_st.get('station_name', '')}  
+                    **Predicted Congestion:** {alt_st['congestion']}  
+                    **Charger Power:** {alt_st['charger_power_kw']:.1f} kW ({alt_st['num_chargers']} plug{'s' if alt_st['num_chargers'] > 1 else ''})  
+                    **Wait Time:** {alt_st['estimated_wait_min']:.1f} min  
+                    **Charging Time:** {alt_st['estimated_charge_min']:.1f} min  
+                    **Total Turnaround:** **{alt_st['total_time_min']:.1f} min**
+                    """
+                )
+
+    # ============================================================
     # 4. ALL 4 STATIONS COMPARISON TABLE
     # ============================================================
-    st.markdown("### 📍 Kavali Charging Stations")
+    st.markdown("### 📍 All 4 Kavali Charging Stations")
     display_df = recommendations[
         [
             "rank",
