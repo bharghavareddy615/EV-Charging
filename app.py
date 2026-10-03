@@ -28,10 +28,15 @@ st.set_page_config(
 )
 
 # ============================================================
-# 🎨 KAVALI EV CHARGING INTELLIGENCE — CUSTOM CSS
+# 🎨 KAVALI EV CHARGING INTELLIGENCE — STRICT DARK MODE CSS
 # ============================================================
 st.markdown("""<style>
-/* =========================================================   GLOBAL   ========================================================= */
+/* =========================================================   STRICT DARK MODE GLOBALS   ========================================================= */
+:root, html, body {
+    color-scheme: dark !important;
+    background-color: #0b0f14 !important;
+}
+
 .stApp {
     background:
         radial-gradient(
@@ -44,13 +49,82 @@ st.markdown("""<style>
             rgba(30, 120, 255, 0.08),
             transparent 30%
         ),
-        #0b0f14;
-    color: #f5f7fa;
+        #0b0f14 !important;
+    color: #f5f7fa !important;
+    color-scheme: dark !important;
+}
+
+/* Enforce dark sidebar */
+section[data-testid="stSidebar"] {
+    background-color: #0b0f14 !important;
+    border-right: 1px solid rgba(148, 163, 184, 0.12) !important;
+}
+section[data-testid="stSidebar"] * {
+    color: #f5f7fa !important;
+}
+
+/* Header & Main container */
+header[data-testid="stHeader"] {
+    background-color: transparent !important;
 }
 .main .block-container {
     max-width: 1450px;
     padding-top: 1.5rem;
     padding-bottom: 4rem;
+    color: #f5f7fa !important;
+}
+
+/* Force dark styling on all form controls & inputs */
+input, textarea, select {
+    background-color: rgba(15, 23, 42, 0.9) !important;
+    color: #f8fafc !important;
+    border: 1px solid rgba(148, 163, 184, 0.25) !important;
+}
+div[data-baseweb="input"], div[data-baseweb="base-input"] {
+    background-color: rgba(15, 23, 42, 0.9) !important;
+    border-color: rgba(148, 163, 184, 0.25) !important;
+}
+div[data-baseweb="select"] > div {
+    background-color: rgba(15, 23, 42, 0.9) !important;
+    color: #f8fafc !important;
+    border-color: rgba(148, 163, 184, 0.25) !important;
+}
+ul[role="listbox"], li[role="option"] {
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
+}
+
+/* Force dark tabs */
+button[data-baseweb="tab"] {
+    color: #94a3b8 !important;
+    background: transparent !important;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: #38bdf8 !important;
+    border-bottom-color: #38bdf8 !important;
+}
+
+/* Force dark expanders */
+div[data-testid="stExpander"] {
+    background-color: rgba(15, 23, 42, 0.6) !important;
+    border: 1px solid rgba(148, 163, 184, 0.18) !important;
+    border-radius: 12px !important;
+}
+div[data-testid="stExpander"] summary {
+    color: #f8fafc !important;
+}
+
+/* Force dark buttons */
+button[kind="primary"] {
+    background: linear-gradient(135deg, #0284c7, #0ea5e9) !important;
+    color: #ffffff !important;
+    border: none !important;
+    font-weight: 750 !important;
+}
+button[kind="secondary"] {
+    background: rgba(30, 41, 59, 0.8) !important;
+    color: #f1f5f9 !important;
+    border: 1px solid rgba(148, 163, 184, 0.2) !important;
 }
 
 /* Header & Hero */
