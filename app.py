@@ -1,4 +1,4 @@
-import os, io, math, warnings
+import os, io, math, re, warnings
 warnings.filterwarnings('ignore')
 
 import numpy as np
@@ -178,9 +178,144 @@ def event_adjustment(future, events):
     return out
 
 
+# ----------------------------- Station Recommendation Logic -----------------------------
+def get_congestion_level(utilization):
+    if utilization < 0.35:
+        return "🟢 Low"
+    elif utilization < 0.70:
+        return "🟡 Medium"
+    else:
+        return "🔴 High"
+
+
+def estimate_wait_time(utilization, num_chargers):
+    """
+    Approximate waiting time from predicted utilization.
+    This is an estimate, not live queue data.
+    """
+    num_chargers = max(int(num_chargers), 1)
+    if utilization < 0.35:
+        wait = 5.0
+    elif utilization < 0.60:
+        wait = 10.0
+    elif utilization < 0.80:
+        wait = 20.0
+    else:
+        wait = 30.0
+    # More chargers generally reduce waiting
+    wait = wait / np.sqrt(num_chargers)
+    return round(float(wait), 1)
+
+
+def estimate_charging_time(required_energy_kwh, charger_power_kw):
+    """
+    Estimated charging duration in minutes.
+    """
+    charger_power_kw = max(float(charger_power_kw), 1.0)
+    efficiency = 0.90
+    charging_hours = required_energy_kwh / (charger_power_kw * efficiency)
+    return round(float(charging_hours * 60), 1)
+
+
+def calculate_station_score(row):
+    """
+    Lower score = better station.
+    Combines predicted congestion, estimated waiting, and charging duration.
+    """
+    congestion_penalty = row["predicted_utilization"] * 50
+    wait_penalty = row["estimated_wait_min"]
+    charging_penalty = row["estimated_charge_min"]
+    return float(congestion_penalty + wait_penalty + charging_penalty)
+
+
+def apply_event_effect(prediction, event_impact_pct):
+    multiplier = 1 + (event_impact_pct / 100)
+    return prediction * multiplier
+
+
+def extract_station_power(station_row):
+    if "rated_power_kw" in station_row and pd.notnull(station_row["rated_power_kw"]):
+        return float(station_row["rated_power_kw"])
+    chargers_str = str(station_row.get("chargers", ""))
+    match = re.search(r'(\d+(?:\.\d+)?)\s*k[wW]', chargers_str)
+    return float(match.group(1)) if match else 50.0
+
+
+def compute_station_forecasts(city_forecast, hourly_df, station_ids):
+    """
+    Disaggregates the 24-hour city forecast across individual stations
+    based on each station's empirical hourly demand profile.
+    """
+    piv = hourly_df.groupby(["hour", "station_id"])["energy_kwh"].mean().unstack(fill_value=0)
+    hour_shares = piv.div(piv.sum(axis=1) + 1e-6, axis=0)
+    station_forecasts = {}
+    for sid in station_ids:
+        if sid in hour_shares.columns:
+            shares = [hour_shares.loc[h, sid] if h in hour_shares.index else 0.25 for h in range(len(city_forecast))]
+            station_forecasts[sid] = np.array(city_forecast) * np.array(shares)
+        else:
+            station_forecasts[sid] = np.array(city_forecast) / max(len(station_ids), 1)
+    return station_forecasts
+
+
+def generate_station_recommendations(
+    station_forecasts,
+    station_info,
+    required_energy_kwh=20.0
+):
+    """
+    Combine forecast + station metadata to recommend the best EV charging station.
+    """
+    recommendations = []
+    for station_id, forecast in station_forecasts.items():
+        predicted_energy = float(np.mean(forecast))
+        
+        station_rows = station_info[station_info["station_id"] == station_id]
+        if len(station_rows) == 0:
+            continue
+        station = station_rows.iloc[0]
+        
+        num_chargers = int(station.get("num_chargers", 1))
+        charger_power = extract_station_power(station)
+        
+        # Max capacity per hour: num_chargers * rated_power
+        max_capacity_kwh = max(num_chargers * charger_power, 1.0)
+        utilization = float(np.clip(predicted_energy / max_capacity_kwh, 0.05, 0.98))
+        
+        congestion = get_congestion_level(utilization)
+        wait_min = estimate_wait_time(utilization, num_chargers)
+        charge_min = estimate_charging_time(required_energy_kwh, charger_power)
+        total_time = round(wait_min + charge_min, 1)
+        
+        row_dict = {
+            "station_id": station_id,
+            "station_name": station.get("station_name", station_id),
+            "area": station.get("area", "Kavali"),
+            "predicted_energy_kwh": round(predicted_energy, 1),
+            "predicted_utilization": utilization,
+            "congestion": congestion,
+            "num_chargers": num_chargers,
+            "charger_power_kw": charger_power,
+            "estimated_wait_min": wait_min,
+            "estimated_charge_min": charge_min,
+            "total_time_min": total_time,
+        }
+        row_dict["score"] = calculate_station_score(row_dict)
+        recommendations.append(row_dict)
+        
+    if not recommendations:
+        return pd.DataFrame()
+        
+    rec_df = pd.DataFrame(recommendations)
+    rec_df = rec_df.sort_values("score", ascending=True).reset_index(drop=True)
+    rec_df["rank"] = [f"#{i+1}" for i in range(len(rec_df))]
+    return rec_df
+
+
 @st.cache_data(show_spinner=False)
 def prepare_data(hourly_bytes, stations_bytes):
     h = pd.read_csv(io.BytesIO(hourly_bytes)); s = pd.read_csv(io.BytesIO(stations_bytes))
+    s["rated_power_kw"] = s.apply(extract_station_power, axis=1)
     hs = make_hourly_station_grid(h, s)
     city = aggregate_city(hs)
     city = add_lag_features(city)
@@ -534,6 +669,152 @@ with tab1:
         st.markdown(f"**Peak:** {peak.timestamp.strftime('%A %I:%M %p')} at **{peak.forecast_kwh:,.1f} kWh**.")
         st.markdown(f"**Day total:** approximately **{total:,.1f} kWh** across the four monitored stations.")
         st.markdown("The model combines recent lags, same-week patterns, calendar seasonality and a long-term trend proxy rather than simply copying the same date from the previous year.")
+
+    # ----------------------------- Station Recommendation System -----------------------------
+    st.divider()
+    st.subheader("🔌 Find the Best Charging Station")
+    st.caption("AI-powered station scoring combining predicted demand, queue wait estimates, and charging speeds across Kavali stations.")
+
+    col_inp1, col_inp2 = st.columns([1, 2])
+    with col_inp1:
+        required_energy = st.number_input(
+            "How much energy do you need? (kWh)",
+            min_value=5.0,
+            max_value=100.0,
+            value=20.0,
+            step=5.0,
+            help="Estimated energy required for your vehicle (e.g. 20 kWh gives ~120-140 km range for average EV)"
+        )
+    with col_inp2:
+        st.write("")
+        st.write("")
+        st.info("💡 **Planning Tip**: Lower total time = faster turnaround. High power DC chargers cut charging duration, while multi-gun stations reduce waiting during peak hours.")
+
+    # Generate station forecasts
+    station_forecasts = compute_station_forecasts(fut["forecast_kwh"].values, hs, stations["station_id"].unique())
+    recommendations = generate_station_recommendations(station_forecasts, stations, required_energy)
+
+    if len(event_hours):
+        avg_event_impact = event_hours.event_impact_pct.mean()
+        if avg_event_impact != 0:
+            st.warning(
+                f"🎉 **Event impact detected**: {avg_event_impact:+.0f}% scenario demand change reflected in station utilization."
+            )
+
+    st.subheader("📍 Kavali Charging Stations")
+    display_df = recommendations[
+        [
+            "rank",
+            "station_id",
+            "predicted_energy_kwh",
+            "congestion",
+            "num_chargers",
+            "charger_power_kw",
+            "estimated_wait_min",
+            "estimated_charge_min",
+            "total_time_min"
+        ]
+    ].copy()
+    display_df.columns = [
+        "Rank",
+        "Station",
+        "Predicted Demand (kWh)",
+        "Congestion",
+        "Chargers",
+        "Power (kW)",
+        "Wait (min)",
+        "Charge (min)",
+        "Total Time (min)"
+    ]
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    card_c1, card_c2 = st.columns(2)
+    with card_c1:
+        if len(recommendations) > 0:
+            best = recommendations.iloc[0]
+            st.success(
+                f"""
+                🥇 **Recommended Station: {best['station_id']}**  
+                **Name:** {best['station_name']} ({best['area']})  
+                **Predicted Congestion:** {best['congestion']}  
+                **Charger Power:** {best['charger_power_kw']} kW ({best['num_chargers']} plug{'s' if best['num_chargers'] > 1 else ''})  
+                **Estimated Wait:** {best['estimated_wait_min']} min  
+                **Estimated Charging:** {best['estimated_charge_min']} min  
+                **Estimated Total Time:** {best['total_time_min']} min  
+                """
+            )
+    with card_c2:
+        if len(recommendations) > 0:
+            fastest_charger = recommendations.loc[
+                recommendations["charger_power_kw"].idxmax()
+            ]
+            st.info(
+                f"""
+                ⚡ **Fastest Charger: {fastest_charger['station_id']}**  
+                **Name:** {fastest_charger['station_name']}  
+                **Charger Power:** **{fastest_charger['charger_power_kw']} kW**  
+                **Estimated Charging Time:** {fastest_charger['estimated_charge_min']} min  
+                **Predicted Congestion:** {fastest_charger['congestion']}
+                """
+            )
+
+    st.subheader("📈 Expected Demand — Next 3 Hours")
+    next_3_hours = []
+    for station_id, forecast in station_forecasts.items():
+        for i in range(min(3, len(forecast))):
+            next_3_hours.append({
+                "Station": station_id,
+                "Time Window": f"+{i + 1}h ({fut.timestamp.iloc[i].strftime('%I:%M %p')})",
+                "Predicted Energy (kWh)": round(float(forecast[i]), 2)
+            })
+    next_3_df = pd.DataFrame(next_3_hours)
+    st.dataframe(next_3_df, use_container_width=True, hide_index=True)
+
+    st.subheader("🕐 24-Hour Station Forecast")
+    col_sel, col_peak = st.columns([2, 1])
+    with col_sel:
+        selected_station = st.selectbox(
+            "Select Station",
+            list(station_forecasts.keys()),
+            format_func=lambda sid: f"{sid} — {stations.loc[stations.station_id == sid, 'station_name'].iloc[0] if len(stations.loc[stations.station_id == sid]) else sid}"
+        )
+    with col_peak:
+        st_forecast = station_forecasts[selected_station]
+        peak_index = int(np.argmax(st_forecast))
+        peak_demand = float(st_forecast[peak_index])
+        st.metric(
+            "Peak Demand Hour",
+            fut.timestamp.iloc[peak_index].strftime("%I:%M %p"),
+            f"{peak_demand:.1f} kWh"
+        )
+
+    hours_labels = [ts.strftime("%I %p") for ts in fut.timestamp]
+    fig_st = go.Figure()
+    fig_st.add_trace(
+        go.Scatter(
+            x=hours_labels,
+            y=st_forecast,
+            mode="lines+markers",
+            name="Predicted Demand (kWh)",
+            line=dict(width=3, color="#00b4d8"),
+            marker=dict(size=6)
+        )
+    )
+    fig_st.update_layout(
+        title=f"24-Hour Demand Forecast — {selected_station}",
+        xaxis_title="Hour of Day",
+        yaxis_title="Energy Demand (kWh)",
+        template="plotly_white",
+        height=380,
+        margin=dict(l=10, r=10, t=40, b=10)
+    )
+    st.plotly_chart(fig_st, use_container_width=True)
+
+    st.caption("ℹ️ *Notice: Predicted Congestion and Estimated Waiting Time are calculated using hybrid demand forecasts and queuing approximations on the Kavali dataset. They serve as planning intelligence rather than real-time hardware queue telemetry.*")
 
 with tab2:
     st.subheader("📊 Historical charging analytics")
