@@ -1,0 +1,5 @@
+station_id,station_name,area,num_chargers,chargers,source_note
+KVL-01,"AP | Kavali | Hotel Grand 9 (NH16, near Gowravaram)",NH16 highway,1,DC 60kW,Listed on Statiq (1 DC charger); power rating assumed
+KVL-02,Kavali Town Centre (synthetic),Town,2,"AC 7.4kW,AC 7.4kW",Synthetic
+KVL-03,Kavali NH16 Bypass Fast Charge (synthetic),NH16 highway,2,"DC 30kW,DC 30kW",Synthetic
+KVL-04,Kavali Bus Stand / Market (synthetic),Town,2,"AC 3.3kW,AC 3.3kW",Synthetic
