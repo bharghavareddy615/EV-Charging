@@ -187,17 +187,40 @@ def prepare_data(hourly_bytes, stations_bytes):
     return hs, city, s
 
 
-def xgb_train(train, features):
-    X = train[features].replace([np.inf,-np.inf],np.nan).fillna(0)
+def _pickle_bytes(df):
+    b = io.BytesIO()
+    df.to_pickle(b)
+    return b.getvalue()
+
+
+@st.cache_resource(show_spinner=False)
+def xgb_train_cached(train_bytes, features):
+    train = pd.read_pickle(io.BytesIO(train_bytes))
+    X = train[list(features)].replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0)
     y = train["energy_kwh"].astype(float)
     model = XGBRegressor(
-        n_estimators=700, max_depth=7, learning_rate=0.035,
-        subsample=.85, colsample_bytree=.85, min_child_weight=3,
-        reg_alpha=.05, reg_lambda=1.2, objective="reg:squarederror",
-        random_state=42, n_jobs=-1
+        n_estimators=420,
+        max_depth=6,
+        learning_rate=0.045,
+        subsample=0.85,
+        colsample_bytree=0.85,
+        min_child_weight=3,
+        reg_alpha=0.05,
+        reg_lambda=1.2,
+        objective="reg:squarederror",
+        random_state=42,
+        n_jobs=-1,
+        tree_method="hist"
     )
-    model.fit(X,y,verbose=False)
+    model.fit(X, y, verbose=False)
     return model
+
+
+def xgb_train(train, features):
+    return xgb_train_cached(_pickle_bytes(train), tuple(features))
+
 
 
 def make_lstm_sequences(df, feature_cols, target_col, lookback):
@@ -211,16 +234,54 @@ def make_lstm_sequences(df, feature_cols, target_col, lookback):
     return np.array(X), np.array(Y), scaler_x, scaler_y
 
 
+@st.cache_resource(show_spinner=False)
+def lstm_train_cached(train_bytes, feature_cols, lookback=48, epochs=8):
+    if not TF_OK:
+        return None
+    base = pd.read_pickle(io.BytesIO(train_bytes))
+    X, Y, scaler_x, scaler_y = make_lstm_sequences(
+        base,
+        list(feature_cols),
+        "energy_kwh",
+        lookback
+    )
+    model = build_lstm(
+        (X.shape[1], X.shape[2])
+    )
+    es = EarlyStopping(
+        monitor="val_loss",
+        patience=2,
+        restore_best_weights=True
+    )
+    model.fit(
+        X,
+        Y,
+        epochs=epochs,
+        batch_size=128,
+        validation_split=0.10,
+        shuffle=False,
+        callbacks=[es],
+        verbose=0
+    )
+    return model, scaler_x, scaler_y
+
+
 def build_lstm(input_shape):
     model = Sequential([
-        LSTM(64, return_sequences=True, input_shape=input_shape),
-        Dropout(.20),
-        LSTM(32),
-        Dropout(.15),
-        Dense(16, activation="relu"),
+        LSTM(
+            32,
+            return_sequences=True,
+            input_shape=input_shape
+        ),
+        Dropout(0.12),
+        LSTM(16),
+        Dense(8, activation="relu"),
         Dense(1)
     ])
-    model.compile(optimizer="adam", loss="mse")
+    model.compile(
+        optimizer="adam",
+        loss="mse"
+    )
     return model
 
 
@@ -273,26 +334,43 @@ def recursive_xgb_forecast(model, history, forecast_date, features, events):
     return future
 
 
-def lstm_fit_forecast(train_df, future, feature_cols, lookback=48, epochs=20):
-    if not TF_OK: return None, None
-    base = train_df.copy()
-    X,Y,sx,sy = make_lstm_sequences(base, feature_cols, "energy_kwh", lookback)
-    model=build_lstm((X.shape[1],X.shape[2]))
-    es=EarlyStopping(monitor="val_loss",patience=4,restore_best_weights=True)
-    model.fit(X,Y,epochs=epochs,batch_size=64,validation_split=.12,shuffle=False,callbacks=[es],verbose=0)
-    # Recursive future sequence. For unknown future demand, use XGB prediction as an auxiliary
-    # feature surrogate for the target column if target is among feature_cols; here it is not.
-    combined=base.copy()
-    preds=[]
-    for _, r in future.iterrows():
-        feat=r.copy()
-        # LSTM features are all known calendar + lag/rolling features. No future target required.
-        seq_rows = pd.concat([combined.tail(lookback), pd.DataFrame([feat])],ignore_index=True)
-        vals=sx.transform(seq_rows[feature_cols].replace([np.inf,-np.inf],np.nan).fillna(0))[-lookback:]
-        p=float(sy.inverse_transform(model.predict(vals[np.newaxis,:,:],verbose=0))[0,0])
-        p=max(0,p); preds.append(p)
-        combined=pd.concat([combined,pd.DataFrame([{**feat,"energy_kwh":p}])],ignore_index=True)
-    return model, np.array(preds)
+def lstm_fit_forecast(
+    train_df,
+    future,
+    feature_cols,
+    lookback=48,
+    epochs=8
+):
+    if not TF_OK:
+        return None, None
+    trained = lstm_train_cached(
+        _pickle_bytes(train_df),
+        tuple(feature_cols),
+        lookback,
+        epochs
+    )
+    if trained is None:
+        return None, None
+    model, scaler_x, scaler_y = trained
+    combined = train_df.copy()
+    predictions = []
+    for _, row in future.iterrows():
+        feat = row.copy()
+        sequence_rows = pd.concat(
+            [
+                combined.tail(lookback),
+                pd.DataFrame([feat])
+            ],
+            ignore_index=True
+        )
+        vals = scaler_x.transform(
+            sequence_rows[list(feature_cols)].replace([np.inf, -np.inf], np.nan).fillna(0)
+        )[-lookback:]
+        p = float(scaler_y.inverse_transform(model.predict(vals[np.newaxis, :, :], verbose=0))[0, 0])
+        p = max(0.0, p)
+        predictions.append(p)
+        combined = pd.concat([combined, pd.DataFrame([{**feat, "energy_kwh": p}])], ignore_index=True)
+    return model, np.array(predictions)
 
 
 def validation_scores(city, features, lookback=48):
@@ -317,7 +395,7 @@ with st.sidebar:
     forecast_mode = st.radio("Forecast date", ["Today", "Choose date"], index=0)
     chosen = st.date_input("Date", value=pd.Timestamp.today().date()) if forecast_mode=="Choose date" else pd.Timestamp.today().date()
     blend = st.slider("XGBoost weight", 0.0, 1.0, 0.60, 0.05)
-    epochs = st.slider("LSTM epochs", 5, 40, 18, 1)
+    st.caption("⚡ Models are cached after first training. Forecast requests use fast inference.")
     run = st.button("🚀 Run / Refresh Forecast", type="primary", use_container_width=True)
 
 hourly = read_csv(hourly_up, DEFAULT_HOURLY)
@@ -370,27 +448,62 @@ with tab1:
         st.warning("This date is beyond the historical range. Forecast uncertainty will increase because the model must extrapolate further into the future.")
 
     # Event overlay is applied before final display.
-    with st.spinner("Training XGBoost and preparing the hybrid forecast…"):
-        xgb=xgb_train(city,FEATURES)
-        fut=build_future_rows(city,forecast_date,events)
-        fut=event_adjustment(fut,events)
-        xgb_pred=[]
-        work=city.copy()
-        for _,r in fut.iterrows():
-            xx=pd.DataFrame([r])[FEATURES].replace([np.inf,-np.inf],np.nan).fillna(0)
-            p=max(0,float(xgb.predict(xx)[0]))
-            p*=max(0.0,1+r.event_impact_pct/100)
-            xgb_pred.append(p)
-            work=pd.concat([work,pd.DataFrame([{**r,"energy_kwh":p}])],ignore_index=True)
-        fut["xgb_pred_kwh"]=xgb_pred
-        lstm_model,lstm_pred=lstm_fit_forecast(city,fut,FEATURES,lookback=48,epochs=epochs)
+    with st.spinner("⚡ Generating fast forecast..."):
+        # Convert training data to bytes for Streamlit cache
+        train_bytes = _pickle_bytes(city)
+        # -----------------------------------
+        # LOAD / TRAIN XGBOOST ONLY ONCE
+        # -----------------------------------
+        xgb = xgb_train_cached(
+            train_bytes,
+            tuple(FEATURES)
+        )
+        # -----------------------------------
+        # CREATE FUTURE 24 HOURS
+        # -----------------------------------
+        fut = build_future_rows(
+            city,
+            forecast_date,
+            events
+        )
+        fut = event_adjustment(
+            fut,
+            events
+        )
+        # -----------------------------------
+        # FAST XGBOOST INFERENCE
+        # -----------------------------------
+        xgb_pred = []
+        work = city.copy()
+        for _, r in fut.iterrows():
+            xx = pd.DataFrame([r])[FEATURES]
+            xx = xx.replace(
+                [np.inf, -np.inf],
+                np.nan
+            ).fillna(0)
+            prediction = float(
+                xgb.predict(xx)[0]
+            )
+            prediction = max(
+                0.0,
+                prediction
+            )
+            # Event adjustment
+            prediction *= max(
+                0.0,
+                1 + r.event_impact_pct / 100
+            )
+            xgb_pred.append(prediction)
+            work = pd.concat([work, pd.DataFrame([{**r, "energy_kwh": prediction}])], ignore_index=True)
+        fut["xgb_pred_kwh"] = xgb_pred
+        lstm_model, lstm_pred = lstm_fit_forecast(city, fut, FEATURES, lookback=48, epochs=8)
         if lstm_pred is None:
-            fut["lstm_pred_kwh"]=fut.xgb_pred_kwh.values
+            fut["lstm_pred_kwh"] = fut.xgb_pred_kwh.values
             st.warning("TensorFlow/Keras is not installed, so the current run uses XGBoost for the forecast. Install the requirements file to activate LSTM.")
         else:
-            fut["lstm_pred_kwh"]=lstm_pred*(1+fut.event_impact_pct.values/100)
-        fut["forecast_kwh"]=blend*fut.xgb_pred_kwh+(1-blend)*fut.lstm_pred_kwh
-        fut["forecast_kwh"]=fut.forecast_kwh.clip(lower=0)
+            fut["lstm_pred_kwh"] = lstm_pred * (1 + fut.event_impact_pct.values / 100)
+        fut["forecast_kwh"] = blend * fut.xgb_pred_kwh + (1 - blend) * fut.lstm_pred_kwh
+        fut["forecast_kwh"] = fut.forecast_kwh.clip(lower=0)
 
     total=fut.forecast_kwh.sum(); peak=fut.loc[fut.forecast_kwh.idxmax()]; avg=fut.forecast_kwh.mean()
     event_hours=fut[fut.event_impact_pct!=0]
