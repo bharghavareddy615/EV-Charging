@@ -576,13 +576,9 @@ FEATURES=["hour_sin","hour_cos","dow_sin","dow_cos","month_sin","month_cos","day
           "roll_std_3","roll_std_6","roll_std_24","roll_std_72","roll_std_168","growth_30d"]
 
 with tab1:
-    st.subheader(f"Full-day demand forecast — {forecast_date.strftime('%A, %d %B %Y')}")
-    if forecast_date <= last_hist:
-        st.info("Selected date is inside the historical period. Forecast is generated as a model simulation; actual values remain available for comparison.")
-    elif forecast_date > last_hist + pd.Timedelta(days=30):
-        st.warning("This date is beyond the historical range. Forecast uncertainty will increase because the model must extrapolate further into the future.")
-
-    # Event overlay is applied before final display.
+    # -----------------------------------
+    # FAST FORECAST INFERENCE
+    # -----------------------------------
     with st.spinner("⚡ Generating fast forecast..."):
         # Convert training data to bytes for Streamlit cache
         train_bytes = _pickle_bytes(city)
@@ -640,45 +636,24 @@ with tab1:
         fut["forecast_kwh"] = blend * fut.xgb_pred_kwh + (1 - blend) * fut.lstm_pred_kwh
         fut["forecast_kwh"] = fut.forecast_kwh.clip(lower=0)
 
-    total=fut.forecast_kwh.sum(); peak=fut.loc[fut.forecast_kwh.idxmax()]; avg=fut.forecast_kwh.mean()
-    event_hours=fut[fut.event_impact_pct!=0]
-    m1,m2,m3,m4=st.columns(4)
-    for c,t,v,s in [(m1,"PREDICTED DAILY ENERGY",f"{total:,.1f} kWh","24-hour total"),(m2,"PEAK HOUR",peak.timestamp.strftime("%I:%M %p"),f"{peak.forecast_kwh:,.1f} kWh"),(m3,"AVG HOURLY",f"{avg:,.1f} kWh","daily mean"),(m4,"EVENT HOURS",str(len(event_hours)),"event-adjusted hours")]:
-        c.markdown(f'<div class="card"><div class="metric-title">{t}</div><div class="metric-value">{v}</div><div class="small">{s}</div></div>',unsafe_allow_html=True)
+    # Compute station forecasts
+    station_forecasts = compute_station_forecasts(fut["forecast_kwh"].values, hs, stations["station_id"].unique())
 
-    fig=go.Figure()
-    fig.add_trace(go.Scatter(x=fut.timestamp,y=fut.forecast_kwh,mode="lines+markers",name="Hybrid forecast",line=dict(width=4),fill="tozeroy"))
-    fig.add_trace(go.Scatter(x=fut.timestamp,y=fut.xgb_pred_kwh,mode="lines",name="XGBoost",line=dict(dash="dash")))
-    fig.add_trace(go.Scatter(x=fut.timestamp,y=fut.lstm_pred_kwh,mode="lines",name="LSTM",line=dict(dash="dot")))
-    if len(event_hours):
-        fig.add_trace(go.Scatter(x=event_hours.timestamp,y=event_hours.forecast_kwh,mode="markers",name="Event impact",marker=dict(size=11,symbol="star")))
-    fig.update_layout(height=430,margin=dict(l=10,r=10,t=35,b=10),xaxis_title="Time",yaxis_title="Energy demand (kWh)",hovermode="x unified")
-    st.plotly_chart(fig,use_container_width=True)
+    if forecast_date <= last_hist:
+        st.info("Selected date is inside the historical period. Results reflect model simulation and historical trends.")
+    elif forecast_date > last_hist + pd.Timedelta(days=30):
+        st.warning("This date is beyond the historical range. Forecast uncertainty will increase because the model must extrapolate further into the future.")
 
-    left,right=st.columns([1.35,1])
-    with left:
-        st.markdown("### Hour-by-hour forecast")
-        table=fut[["timestamp","xgb_pred_kwh","lstm_pred_kwh","forecast_kwh","event_impact_pct","event_name"]].copy()
-        table.columns=["Time","XGBoost (kWh)","LSTM (kWh)","Hybrid (kWh)","Event impact %","Event"]
-        table["Time"]=table.Time.dt.strftime("%I:%M %p")
-        st.dataframe(table.style.format({"XGBoost (kWh)":"{:.1f}","LSTM (kWh)":"{:.1f}","Hybrid (kWh)":"{:.1f}","Event impact %":"{:.1f}%"}),use_container_width=True,hide_index=True)
-    with right:
-        st.markdown("### Forecast interpretation")
-        if len(event_hours):
-            st.success(f"Event-aware forecast: {len(event_hours)} hours receive an event adjustment. The event inputs are scenario assumptions and should be replaced with verified local event information for deployment.")
-        st.markdown(f"**Peak:** {peak.timestamp.strftime('%A %I:%M %p')} at **{peak.forecast_kwh:,.1f} kWh**.")
-        st.markdown(f"**Day total:** approximately **{total:,.1f} kWh** across the four monitored stations.")
-        st.markdown("The model combines recent lags, same-week patterns, calendar seasonality and a long-term trend proxy rather than simply copying the same date from the previous year.")
-
-    # ----------------------------- Station Recommendation System -----------------------------
-    st.divider()
-    st.subheader("🔌 Find the Best Charging Station")
-    st.caption("AI-powered station scoring combining predicted demand, queue wait estimates, and charging speeds across Kavali stations.")
+    # ============================================================
+    # 1. USER INPUT
+    # ============================================================
+    st.markdown("## 🔌 Find Your Best Charging Station")
+    st.caption("Compare predicted congestion, charger speed, waiting time and estimated charging time before you travel.")
 
     col_inp1, col_inp2 = st.columns([1, 2])
     with col_inp1:
         required_energy = st.number_input(
-            "How much energy do you need? (kWh)",
+            "Energy required (kWh)",
             min_value=5.0,
             max_value=100.0,
             value=20.0,
@@ -690,10 +665,16 @@ with tab1:
         st.write("")
         st.info("💡 **Planning Tip**: Lower total time = faster turnaround. High power DC chargers cut charging duration, while multi-gun stations reduce waiting during peak hours.")
 
-    # Generate station forecasts
-    station_forecasts = compute_station_forecasts(fut["forecast_kwh"].values, hs, stations["station_id"].unique())
-    recommendations = generate_station_recommendations(station_forecasts, stations, required_energy)
+    # ============================================================
+    # 2. STATION RECOMMENDATION
+    # ============================================================
+    recommendations = generate_station_recommendations(
+        station_forecasts,
+        stations,
+        required_energy
+    )
 
+    event_hours = fut[fut.event_impact_pct != 0]
     if len(event_hours):
         avg_event_impact = event_hours.event_impact_pct.mean()
         if avg_event_impact != 0:
@@ -701,7 +682,44 @@ with tab1:
                 f"🎉 **Event impact detected**: {avg_event_impact:+.0f}% scenario demand change reflected in station utilization."
             )
 
-    st.subheader("📍 Kavali Charging Stations")
+    # ============================================================
+    # 3. DECISION CARDS: RECOMMENDED & FASTEST
+    # ============================================================
+    card_c1, card_c2 = st.columns(2)
+    with card_c1:
+        if len(recommendations) > 0:
+            best = recommendations.iloc[0]
+            st.success(
+                f"""
+                🥇 **Recommended Station: {best['station_id']}**  
+                **Name:** {best['station_name']} ({best['area']})  
+                **Predicted Congestion:** {best['congestion']}  
+                **Charger Power:** {best['charger_power_kw']} kW ({best['num_chargers']} plug{'s' if best['num_chargers'] > 1 else ''})  
+                **Estimated Wait:** {best['estimated_wait_min']} min  
+                **Estimated Charging:** {best['estimated_charge_min']} min  
+                **Estimated Total Time:** **{best['total_time_min']} min**  
+                """
+            )
+    with card_c2:
+        if len(recommendations) > 0:
+            fastest_charger = recommendations.loc[
+                recommendations["charger_power_kw"].idxmax()
+            ]
+            st.info(
+                f"""
+                ⚡ **Fastest Charger: {fastest_charger['station_id']}**  
+                **Name:** {fastest_charger['station_name']}  
+                **Charger Power:** **{fastest_charger['charger_power_kw']} kW**  
+                **Estimated Charging Time:** {fastest_charger['estimated_charge_min']} min  
+                **Predicted Congestion:** {fastest_charger['congestion']}  
+                **Estimated Total Time:** {fastest_charger['total_time_min']} min
+                """
+            )
+
+    # ============================================================
+    # 4. ALL 4 STATIONS COMPARISON TABLE
+    # ============================================================
+    st.markdown("### 📍 Kavali Charging Stations")
     display_df = recommendations[
         [
             "rank",
@@ -732,53 +750,43 @@ with tab1:
         hide_index=True
     )
 
-    card_c1, card_c2 = st.columns(2)
-    with card_c1:
-        if len(recommendations) > 0:
-            best = recommendations.iloc[0]
-            st.success(
-                f"""
-                🥇 **Recommended Station: {best['station_id']}**  
-                **Name:** {best['station_name']} ({best['area']})  
-                **Predicted Congestion:** {best['congestion']}  
-                **Charger Power:** {best['charger_power_kw']} kW ({best['num_chargers']} plug{'s' if best['num_chargers'] > 1 else ''})  
-                **Estimated Wait:** {best['estimated_wait_min']} min  
-                **Estimated Charging:** {best['estimated_charge_min']} min  
-                **Estimated Total Time:** {best['total_time_min']} min  
-                """
-            )
-    with card_c2:
-        if len(recommendations) > 0:
-            fastest_charger = recommendations.loc[
-                recommendations["charger_power_kw"].idxmax()
-            ]
-            st.info(
-                f"""
-                ⚡ **Fastest Charger: {fastest_charger['station_id']}**  
-                **Name:** {fastest_charger['station_name']}  
-                **Charger Power:** **{fastest_charger['charger_power_kw']} kW**  
-                **Estimated Charging Time:** {fastest_charger['estimated_charge_min']} min  
-                **Predicted Congestion:** {fastest_charger['congestion']}
-                """
-            )
+    st.caption("ℹ️ *Notice: Predicted Congestion and Estimated Waiting Time are calculated using hybrid demand forecasts and queuing approximations on the Kavali dataset. They serve as planning intelligence rather than real-time hardware queue telemetry.*")
 
-    st.subheader("📈 Expected Demand — Next 3 Hours")
-    next_3_hours = []
-    for station_id, forecast in station_forecasts.items():
-        for i in range(min(3, len(forecast))):
-            next_3_hours.append({
-                "Station": station_id,
-                "Time Window": f"+{i + 1}h ({fut.timestamp.iloc[i].strftime('%I:%M %p')})",
-                "Predicted Energy (kWh)": round(float(forecast[i]), 2)
-            })
-    next_3_df = pd.DataFrame(next_3_hours)
-    st.dataframe(next_3_df, use_container_width=True, hide_index=True)
+    st.divider()
 
-    st.subheader("🕐 24-Hour Station Forecast")
+    # ============================================================
+    # 5. 24-HOUR FORECAST / ANALYTICS
+    # ============================================================
+    st.markdown(f"## 📊 24-Hour Demand Forecast & Analytics — {forecast_date.strftime('%A, %d %B %Y')}")
+
+    total = fut.forecast_kwh.sum()
+    peak = fut.loc[fut.forecast_kwh.idxmax()]
+    avg = fut.forecast_kwh.mean()
+
+    m1, m2, m3, m4 = st.columns(4)
+    for c, t, v, s in [
+        (m1, "PREDICTED DAILY ENERGY", f"{total:,.1f} kWh", "24-hour total"),
+        (m2, "PEAK HOUR", peak.timestamp.strftime("%I:%M %p"), f"{peak.forecast_kwh:,.1f} kWh"),
+        (m3, "AVG HOURLY", f"{avg:,.1f} kWh", "daily mean"),
+        (m4, "EVENT HOURS", str(len(event_hours)), "event-adjusted hours")
+    ]:
+        c.markdown(f'<div class="card"><div class="metric-title">{t}</div><div class="metric-value">{v}</div><div class="small">{s}</div></div>', unsafe_allow_html=True)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=fut.timestamp, y=fut.forecast_kwh, mode="lines+markers", name="Hybrid forecast", line=dict(width=4), fill="tozeroy"))
+    fig.add_trace(go.Scatter(x=fut.timestamp, y=fut.xgb_pred_kwh, mode="lines", name="XGBoost", line=dict(dash="dash")))
+    fig.add_trace(go.Scatter(x=fut.timestamp, y=fut.lstm_pred_kwh, mode="lines", name="LSTM", line=dict(dash="dot")))
+    if len(event_hours):
+        fig.add_trace(go.Scatter(x=event_hours.timestamp, y=event_hours.forecast_kwh, mode="markers", name="Event impact", marker=dict(size=11, symbol="star")))
+    fig.update_layout(height=420, margin=dict(l=10, r=10, t=35, b=10), xaxis_title="Time", yaxis_title="Energy demand (kWh)", hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Station-specific deep dive and Next 3 hours
+    st.markdown("### 🕐 Station-Level Demand Breakdown")
     col_sel, col_peak = st.columns([2, 1])
     with col_sel:
         selected_station = st.selectbox(
-            "Select Station",
+            "Inspect Station Demand Profile",
             list(station_forecasts.keys()),
             format_func=lambda sid: f"{sid} — {stations.loc[stations.station_id == sid, 'station_name'].iloc[0] if len(stations.loc[stations.station_id == sid]) else sid}"
         )
@@ -787,7 +795,7 @@ with tab1:
         peak_index = int(np.argmax(st_forecast))
         peak_demand = float(st_forecast[peak_index])
         st.metric(
-            "Peak Demand Hour",
+            "Station Peak Demand Hour",
             fut.timestamp.iloc[peak_index].strftime("%I:%M %p"),
             f"{peak_demand:.1f} kWh"
         )
@@ -809,12 +817,34 @@ with tab1:
         xaxis_title="Hour of Day",
         yaxis_title="Energy Demand (kWh)",
         template="plotly_white",
-        height=380,
+        height=350,
         margin=dict(l=10, r=10, t=40, b=10)
     )
     st.plotly_chart(fig_st, use_container_width=True)
 
-    st.caption("ℹ️ *Notice: Predicted Congestion and Estimated Waiting Time are calculated using hybrid demand forecasts and queuing approximations on the Kavali dataset. They serve as planning intelligence rather than real-time hardware queue telemetry.*")
+    # Next 3 hours table + Hour-by-hour forecast table
+    col_t1, col_t2 = st.columns([1.1, 1])
+    with col_t1:
+        st.markdown("### 📈 Expected Demand — Next 3 Hours")
+        next_3_hours = []
+        for station_id, forecast in station_forecasts.items():
+            for i in range(min(3, len(forecast))):
+                next_3_hours.append({
+                    "Station": station_id,
+                    "Time Window": f"+{i + 1}h ({fut.timestamp.iloc[i].strftime('%I:%M %p')})",
+                    "Predicted Energy (kWh)": round(float(forecast[i]), 2)
+                })
+        next_3_df = pd.DataFrame(next_3_hours)
+        st.dataframe(next_3_df, use_container_width=True, hide_index=True)
+
+    with col_t2:
+        st.markdown("### 💡 Forecast Interpretation")
+        if len(event_hours):
+            st.success(f"Event-aware forecast: {len(event_hours)} hours receive an event adjustment. The event inputs are scenario assumptions and should be replaced with verified local event information for deployment.")
+        st.markdown(f"**Peak:** {peak.timestamp.strftime('%A %I:%M %p')} at **{peak.forecast_kwh:,.1f} kWh**.")
+        st.markdown(f"**Day total:** approximately **{total:,.1f} kWh** across the four monitored stations.")
+        st.markdown("The model combines recent lags, same-week patterns, calendar seasonality and a long-term trend proxy rather than simply copying the same date from the previous year.")
+
 
 with tab2:
     st.subheader("📊 Historical charging analytics")
