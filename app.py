@@ -27,122 +27,234 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ----------------------------- Styling -----------------------------
-st.markdown("""
-<style>
-.main {background:#f8fafc;}
-.block-container {padding-top:1rem; padding-bottom:2.2rem;}
-.hero {padding:1.4rem 1.6rem; border-radius:18px; background:linear-gradient(135deg,#071a2b,#123b58); color:white; margin-bottom:1.1rem; box-shadow:0 8px 30px rgba(0,0,0,.12);}
-.hero h1 {font-size:2.1rem; margin:0; font-weight:800; letter-spacing:-0.02em;}
-.hero p {opacity:.88; margin:.35rem 0 0; font-size:0.95rem;}
+# ============================================================
+# 🎨 KAVALI EV CHARGING INTELLIGENCE — CUSTOM CSS
+# ============================================================
+st.markdown("""<style>
+/* =========================================================   GLOBAL   ========================================================= */
+.stApp {
+    background:
+        radial-gradient(
+            circle at 10% 0%,
+            rgba(0, 180, 120, 0.08),
+            transparent 30%
+        ),
+        radial-gradient(
+            circle at 90% 10%,
+            rgba(30, 120, 255, 0.08),
+            transparent 30%
+        ),
+        #0b0f14;
+    color: #f5f7fa;
+}
+.main .block-container {
+    max-width: 1450px;
+    padding-top: 1.5rem;
+    padding-bottom: 4rem;
+}
 
-/* Decision Hero Card */
-.best-choice-card {
-    background: #ffffff;
-    border: 2px solid #10b981;
+/* Header & Hero */
+.hero {
+    padding: 1.5rem 1.8rem;
+    border-radius: 18px;
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(18, 59, 88, 0.85));
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    color: white;
+    margin-bottom: 1.2rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+}
+.hero h1 {
+    font-size: 2.1rem;
+    margin: 0;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #f8fafc;
+}
+.hero p {
+    color: #94a3b8;
+    margin: 0.4rem 0 0;
+    font-size: 0.95rem;
+}
+
+/* Section Title */
+.ev-section-title {
+    font-size: 1.3rem;
+    font-weight: 750;
+    color: #f8fafc;
+    margin: 1.5rem 0 0.8rem 0;
+    letter-spacing: -0.01em;
+}
+
+/* Recommend Card (AI Recommended Hero) */
+.recommend-card {
+    background: linear-gradient(145deg, rgba(16, 185, 129, 0.08), rgba(15, 23, 42, 0.95));
+    border: 1.5px solid rgba(16, 185, 129, 0.5);
     border-radius: 18px;
     padding: 1.5rem 1.8rem;
-    box-shadow: 0 10px 28px rgba(16, 185, 129, 0.09);
-    margin-bottom: 1.3rem;
+    box-shadow: 0 10px 30px rgba(16, 185, 129, 0.12);
+    margin-bottom: 1.1rem;
+    position: relative;
+    backdrop-filter: blur(10px);
 }
-.best-choice-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid #f1f5f9;
-    padding-bottom: 0.8rem;
-    margin-bottom: 1rem;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-}
-.best-badge {
-    background: #e6f9f0;
-    color: #047857;
+.recommend-badge {
+    display: inline-block;
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
     font-weight: 750;
     font-size: 0.82rem;
     padding: 0.35rem 0.85rem;
     border-radius: 999px;
-    letter-spacing: 0.04em;
-    border: 1px solid #a7f3d0;
+    letter-spacing: 0.05em;
+    border: 1px solid rgba(52, 211, 153, 0.4);
+    margin-bottom: 0.6rem;
 }
-.best-metrics {
+.recommend-title {
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: #f8fafc;
+    letter-spacing: -0.02em;
+}
+.recommend-location {
+    font-size: 0.92rem;
+    color: #94a3b8;
+    margin-top: 0.2rem;
+    margin-bottom: 0.9rem;
+}
+
+/* Metric Row & Box */
+.metric-row {
     display: flex;
-    gap: 1.2rem;
-    margin: 1.1rem 0;
+    gap: 0.8rem;
+    margin: 0.9rem 0;
     flex-wrap: wrap;
 }
-.best-metric-item {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+.metric-box {
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.15);
     border-radius: 12px;
-    padding: 0.65rem 1.1rem;
-    min-width: 140px;
+    padding: 0.65rem 0.95rem;
     flex: 1;
+    min-width: 105px;
 }
-.total-time-banner {
-    background: #0f172a;
-    color: #38bdf8;
-    font-size: 1.2rem;
-    font-weight: 800;
-    text-align: center;
-    padding: 0.8rem 1rem;
-    border-radius: 12px;
-    letter-spacing: 0.04em;
-    margin: 1rem 0;
+.metric-label {
+    font-size: 0.73rem;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.2rem;
 }
-.why-list {
-    background: #f0fdf4;
-    border: 1px solid #bbf7d0;
-    border-radius: 12px;
-    padding: 0.9rem 1.2rem;
-    margin-top: 1rem;
-    color: #166534;
-    font-size: 0.9rem;
-    line-height: 1.55;
-}
-.st-card {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 14px;
-    padding: 1.1rem 1.2rem;
-    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
-    height: 100%;
-}
-.st-card-title {
+.metric-value {
     font-size: 1.15rem;
     font-weight: 750;
-    color: #0f172a;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    color: #f8fafc;
+}
+
+/* Fast Card (Fastest Charger) */
+.fast-card {
+    background: linear-gradient(145deg, rgba(234, 179, 8, 0.08), rgba(15, 23, 42, 0.95));
+    border: 1.5px solid rgba(234, 179, 8, 0.4);
+    border-radius: 18px;
+    padding: 1.5rem 1.8rem;
+    box-shadow: 0 10px 30px rgba(234, 179, 8, 0.08);
+    margin-bottom: 1.1rem;
+    backdrop-filter: blur(10px);
+}
+.fast-title {
+    color: #facc15;
+    font-size: 0.82rem;
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
     margin-bottom: 0.4rem;
 }
-.st-card-time {
-    font-size: 1.05rem;
+.fast-power {
+    font-size: 1.55rem;
+    font-weight: 800;
+    color: #facc15;
+    margin-top: 0.2rem;
+}
+.fast-label {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    margin-bottom: 0.6rem;
+}
+
+/* 4 Station Cards */
+.station-card {
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 14px;
+    padding: 1.2rem 1.3rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.station-card:hover {
+    border-color: rgba(56, 189, 248, 0.4);
+    transform: translateY(-2px);
+}
+.station-rank {
+    font-size: 0.75rem;
     font-weight: 750;
-    color: #0284c7;
-    margin-top: 0.7rem;
-    border-top: 1px solid #f1f5f9;
-    padding-top: 0.5rem;
+    color: #38bdf8;
+    letter-spacing: 0.06em;
 }
-.progress-bar-bg {
-    background: #e2e8f0;
+.station-name {
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #f8fafc;
+    margin-bottom: 0.2rem;
+}
+.station-status {
+    display: inline-block;
+    font-size: 0.8rem;
+    font-weight: 750;
+    padding: 0.25rem 0.65rem;
     border-radius: 999px;
-    height: 9px;
-    width: 100%;
-    overflow: hidden;
-    margin-top: 6px;
 }
-.progress-bar-fill {
-    height: 100%;
-    border-radius: 999px;
+.status-low {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    border: 1px solid rgba(52, 211, 153, 0.3);
 }
-.card {background:white; border:1px solid #e8edf3; border-radius:16px; padding:1rem 1.1rem; box-shadow:0 4px 18px rgba(20,30,40,.05);}
-.small {font-size:.84rem; color:#667085;}
-.metric-title {font-size:.78rem; color:#667085; text-transform:uppercase; letter-spacing:.06em;}
-.metric-value {font-size:1.55rem; font-weight:750; color:#101828;}
-.badge {display:inline-block; padding:.25rem .55rem; border-radius:999px; font-size:.75rem; font-weight:700; background:#e8f7ee; color:#117a45;}
-.warning {padding:.8rem 1rem; border-radius:12px; background:#fff7e6; border:1px solid #f5d48a; color:#7a5310;}
+.status-medium {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+}
+.status-high {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+/* Why list box */
+.why-list {
+    background: rgba(16, 185, 129, 0.06);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    border-radius: 14px;
+    padding: 1.1rem 1.35rem;
+    margin-top: 1rem;
+    color: #86efac;
+    font-size: 0.92rem;
+    line-height: 1.7;
+}
+
+/* Base card & utility classes */
+.card {
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 14px;
+    padding: 1rem 1.2rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+}
+.small { font-size: 0.82rem; color: #94a3b8; }
+.metric-title { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+.metric-value { font-size: 1.45rem; font-weight: 750; color: #f8fafc; }
+.badge { display: inline-block; padding: 0.25rem 0.55rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; }
+.progress-bar-bg { background: rgba(148, 163, 184, 0.2); border-radius: 999px; height: 8px; width: 100%; overflow: hidden; margin-top: 6px; }
+.progress-bar-fill { height: 100%; border-radius: 999px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -919,103 +1031,211 @@ with tab_find:
         if avg_event_impact != 0:
             st.warning(f"🎉 **Scenario Event Active**: {avg_event_impact:+.0f}% average demand shift factored into station utilization.")
 
-    # 1. 🥇 BEST CHOICE HERO CARD
+    # 1. 🥇 AI RECOMMENDED & ⚡ FASTEST CHARGER DUAL CARDS
     if len(recommendations) > 0:
         best = recommendations.iloc[0]
-        st.markdown('<div style="font-size:1.15rem; font-weight:800; color:#047857; margin-bottom:0.35rem; letter-spacing:0.04em;">🥇 BEST CHOICE</div>', unsafe_allow_html=True)
-        st.markdown(f"""
-        <div class="best-choice-card">
-            <div class="best-choice-header">
-                <div>
-                    <div style="font-size:1.65rem; font-weight:800; color:#0f172a;">
+        fastest = recommendations.loc[recommendations["charger_power_kw"].idxmax()]
+        
+        col_rec, col_fast = st.columns([1.2, 1])
+        with col_rec:
+            st.markdown(
+                f"""
+                <div class="recommend-card">
+                    <div class="recommend-badge">
+                        🥇 AI RECOMMENDED
+                    </div>
+                    <div class="recommend-title">
                         {best['station_id']}
                     </div>
-                    <div style="font-size:0.95rem; font-weight:500; color:#475569; margin-top:0.2rem;">
-                        {best['station_name']} ({best['area']})
+                    <div class="recommend-location">
+                        {best.get('station_name', 'Kavali Charging Station')}
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-box">
+                            <div class="metric-label">Congestion</div>
+                            <div class="metric-value">
+                                {best['congestion']}
+                            </div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">Charger</div>
+                            <div class="metric-value">
+                                ⚡ {best['charger_power_kw']:.1f} kW
+                            </div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">Wait</div>
+                            <div class="metric-value">
+                                ⏱ {best['estimated_wait_min']:.1f} min
+                            </div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">Charging</div>
+                            <div class="metric-value">
+                                🔋 {best['estimated_charge_min']:.1f} min
+                            </div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">Total Time</div>
+                            <div class="metric-value" style="color:#38bdf8;">
+                                {best['total_time_min']:.0f} min
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div>
-                    <span class="best-badge">{best['congestion']} CONGESTION</span>
+                """,
+                unsafe_allow_html=True
+            )
+            
+        with col_fast:
+            st.markdown(
+                f"""
+                <div class="fast-card">
+                    <div class="fast-title">
+                        ⚡ Fastest Charger
+                    </div>
+                    <div class="recommend-title">
+                        {fastest['station_id']}
+                    </div>
+                    <div class="fast-power">
+                        {fastest['charger_power_kw']:.1f} kW
+                    </div>
+                    <div class="fast-label">
+                        Charger rated power &bull; {fastest.get('station_name', 'Kavali Charging Station')}
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-box">
+                            <div class="metric-label">Wait</div>
+                            <div class="metric-value">
+                                ⏱ {fastest['estimated_wait_min']:.1f} min
+                            </div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">Charging</div>
+                            <div class="metric-value">
+                                🔋 {fastest['estimated_charge_min']:.1f} min
+                            </div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">Congestion</div>
+                            <div class="metric-value">
+                                {fastest['congestion']}
+                            </div>
+                        </div>
+                    </div>
                 </div>
-            </div>
-            <div class="best-metrics">
-                <div class="best-metric-item">
-                    <div class="small">CHARGER POWER</div>
-                    <div style="font-size:1.3rem; font-weight:750; color:#0f172a;">⚡ {best['charger_power_kw']:.0f} kW</div>
-                    <div class="small">{best['num_chargers']} plug{'s' if best['num_chargers'] > 1 else ''} available</div>
-                </div>
-                <div class="best-metric-item">
-                    <div class="small">EST. WAIT TIME</div>
-                    <div style="font-size:1.3rem; font-weight:750; color:#0f172a;">⏱ {best['estimated_wait_min']:.0f} min wait</div>
-                    <div class="small">predicted queue</div>
-                </div>
-                <div class="best-metric-item">
-                    <div class="small">CHARGING DURATION</div>
-                    <div style="font-size:1.3rem; font-weight:750; color:#0f172a;">🔋 {best['estimated_charge_min']:.0f} min charging</div>
-                    <div class="small">for {required_energy:.0f} kWh target</div>
-                </div>
-            </div>
-            <div class="total-time-banner">
-                TOTAL EST. TIME: {best['total_time_min']:.0f} min
-            </div>
-            <div class="why-list">
-                <div style="font-weight:750; font-size:1.05rem; margin-bottom:0.4rem; color:#14532d;">
-                    Why {best['station_id']}? ✓
-                </div>
-                <div style="font-size:0.92rem; line-height:1.8; color:#166534;">
-                    {best['congestion']} predicted congestion<br/>
-                    ⚡ Highest charger power ({best['charger_power_kw']:.0f} kW)<br/>
-                    ⏱ Short estimated waiting time ({best['estimated_wait_min']:.1f} min)<br/>
-                    🔋 Short estimated charging duration ({best['estimated_charge_min']:.1f} min)
-                </div>
-                <div style="margin-top:0.6rem; font-size:0.82rem; color:#475569; border-top:1px dashed #bbf7d0; padding-top:0.45rem;">
-                    <strong>AI recommendation based on:</strong><br/>
-                    Demand forecast + congestion + charger power + estimated wait
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+                """,
+                unsafe_allow_html=True
+            )
 
-        with st.expander(f"📋 View {best['station_id']} Station Details & Connector Specs", expanded=False):
-            c_d1, c_d2 = st.columns(2)
-            with c_d1:
-                st.write(f"**Station:** {best['station_name']}")
-                st.write(f"**Corridor / Area:** {best['area']}")
-                st.write(f"**Hardware Rating:** {best['charger_power_kw']:.0f} kW DC Fast Charger")
-            with c_d2:
-                st.write(f"**Available Ports:** {best['num_chargers']} active socket(s)")
-                st.write(f"**Estimated Queue:** {best['estimated_wait_min']:.1f} minutes")
-                st.write(f"**Data Source:** Kavali Highway Infrastructure Network")
-
-    # 2. ⚡ FASTEST VS 🥇 BEST COMPARISON
-    col_fast, col_best = st.columns(2)
-    fastest_charger = recommendations.loc[recommendations["charger_power_kw"].idxmax()]
-    with col_fast:
+        # 2. 💡 WHY THIS STATION?
         st.markdown(f"""
-        <div class="card" style="border-left: 4px solid #eab308; margin-bottom:1rem;">
-            <div class="metric-title" style="color:#ca8a04;">⚡ FASTEST CHARGER</div>
-            <div style="font-size:1.25rem; font-weight:750; margin-top:0.3rem;">{fastest_charger['station_id']} &bull; {fastest_charger['charger_power_kw']:.0f} kW</div>
-            <div class="small">{fastest_charger['station_name']}</div>
-            <div style="margin-top:0.6rem; font-size:0.88rem; color:#475569;">
-                ⏱ <strong>Charging Time:</strong> {fastest_charger['estimated_charge_min']:.1f} min<br/>
-                📊 <strong>Status:</strong> {fastest_charger['congestion']} ({int(fastest_charger['predicted_utilization']*100)}% utilization)
+        <div class="why-list">
+            <div style="font-weight:750; font-size:1.05rem; margin-bottom:0.4rem; color:#4ade80;">
+                Why {best['station_id']}? ✓
             </div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col_best:
-        st.markdown(f"""
-        <div class="card" style="border-left: 4px solid #10b981; margin-bottom:1rem;">
-            <div class="metric-title" style="color:#16a34a;">🥇 BEST OVERALL TURNAROUND</div>
-            <div style="font-size:1.25rem; font-weight:750; margin-top:0.3rem;">{best['station_id']} &bull; {best['total_time_min']:.0f} min total</div>
-            <div class="small">{best['station_name']}</div>
-            <div style="margin-top:0.6rem; font-size:0.88rem; color:#475569;">
-                ⏱ <strong>Wait + Charge:</strong> {best['estimated_wait_min']:.1f}m wait + {best['estimated_charge_min']:.1f}m charge<br/>
-                📊 <strong>Status:</strong> {best['congestion']} ({int(best['predicted_utilization']*100)}% utilization)
+            <div style="font-size:0.92rem; line-height:1.8; color:#dcfce7;">
+                {best['congestion']} predicted congestion<br/>
+                ⚡ Highest charger power ({best['charger_power_kw']:.0f} kW)<br/>
+                ⏱ Short estimated waiting time ({best['estimated_wait_min']:.1f} min)<br/>
+                🔋 Short estimated charging duration ({best['estimated_charge_min']:.1f} min)
+            </div>
+            <div style="margin-top:0.6rem; font-size:0.82rem; color:#94a3b8; border-top:1px dashed rgba(52,211,153,0.3); padding-top:0.45rem;">
+                <strong>AI recommendation based on:</strong><br/>
+                Demand forecast + congestion + charger power + estimated wait
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-    # 3. CURRENT PREDICTED CONGESTION (Visual Meter & Progress Cards)
+    # 3. 📍 COMPARE 4 CHARGING STATIONS (Cards)
+    st.markdown(
+        '<div class="ev-section-title">📍 Compare Charging Stations</div>',
+        unsafe_allow_html=True
+    )
+    cols = st.columns(2)
+    for i, (_, station) in enumerate(recommendations.iterrows()):
+        congestion = str(station["congestion"])
+        if "Low" in congestion:
+            status_class = "status-low"
+        elif "Medium" in congestion:
+            status_class = "status-medium"
+        else:
+            status_class = "status-high"
+        with cols[i % 2]:
+            rank_str = str(station['rank']).replace("#", "")
+            st.markdown(
+                f"""
+                <div class="station-card">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div class="station-rank">
+                            RANK #{rank_str}
+                        </div>
+                        <div class="station-status {status_class}">
+                            {congestion}
+                        </div>
+                    </div>
+                    <div class="station-name">
+                        {station['station_id']}
+                    </div>
+                    <div style="font-size:0.86rem; color:#94a3b8; margin:0.2rem 0 0.5rem;">
+                        {station['station_name']} ({station['area']})
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-box">
+                            <div class="metric-label">Power</div>
+                            <div class="metric-value">⚡ {station['charger_power_kw']:.1f} kW</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">Wait</div>
+                            <div class="metric-value">⏱ {station['estimated_wait_min']:.1f} min</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">Charge</div>
+                            <div class="metric-value">🔋 {station['estimated_charge_min']:.1f} min</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">Total</div>
+                            <div class="metric-value" style="color:#38bdf8; font-weight:750;">{station['total_time_min']:.0f} min</div>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+    # 4. 📋 DETAILED STATION DATA EXPANDER
+    with st.expander("📋 View detailed station data", expanded=False):
+        display_df = recommendations[
+            [
+                "rank",
+                "station_id",
+                "predicted_energy_kwh",
+                "congestion",
+                "num_chargers",
+                "charger_power_kw",
+                "estimated_wait_min",
+                "estimated_charge_min",
+                "total_time_min"
+            ]
+        ].copy()
+        display_df.columns = [
+            "Rank",
+            "Station",
+            "Predicted Demand (kWh)",
+            "Congestion",
+            "Chargers",
+            "Power (kW)",
+            "Wait (min)",
+            "Charge (min)",
+            "Total Time (min)"
+        ]
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    # 5. 📊 CURRENT PREDICTED CONGESTION (Visual Meter & Progress Cards)
     st.markdown("### 📊 Current Predicted Status")
     meter_html = '<div style="background:#0f172a; color:#f8fafc; padding:1.1rem 1.4rem; border-radius:14px; font-family:monospace; font-size:0.98rem; margin-bottom:1.1rem; box-shadow:0 4px 15px rgba(0,0,0,0.08);">'
     meter_html += '<div style="color:#94a3b8; font-weight:750; font-size:0.8rem; letter-spacing:0.08em; margin-bottom:0.75rem;">CURRENT PREDICTED STATUS</div>'
@@ -1032,25 +1252,7 @@ with tab_find:
     meter_html += '</div>'
     st.markdown(meter_html, unsafe_allow_html=True)
 
-    status_cols = st.columns(len(recommendations))
-    for col, (_, r_st) in zip(status_cols, recommendations.iterrows()):
-        u_pct = int(r_st['predicted_utilization'] * 100)
-        bar_color = "#10b981" if u_pct < 35 else ("#f59e0b" if u_pct < 70 else "#ef4444")
-        with col:
-            st.markdown(f"""
-            <div class="card" style="padding:0.85rem 1rem;">
-                <div style="font-weight:750; font-size:1.05rem;">{r_st['station_id']}</div>
-                <div class="small" style="margin-bottom:0.4rem;">{r_st['congestion']} &bull; {u_pct}% cap</div>
-                <div class="progress-bar-bg">
-                    <div class="progress-bar-fill" style="width:{u_pct}%; background:{bar_color};"></div>
-                </div>
-                <div class="small" style="margin-top:0.4rem; font-size:0.78rem;">Est. Wait: <strong>{r_st['estimated_wait_min']:.1f} min</strong></div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.write("")
-
-    # 4. NEXT 3 HOURS LOOKAHEAD (Traffic Light Grid)
+    # 6. 🕒 NEXT 3 HOURS LOOKAHEAD (Traffic Light Grid)
     st.markdown("### 🕒 Next 3 Hours Lookahead")
     next3_rows = []
     warning_stations = []
@@ -1079,65 +1281,11 @@ with tab_find:
     if warning_stations:
         st.warning(f"⚠️ **Congestion Alert**: {', '.join(warning_stations)} is expected to experience increasing congestion over the next 2 hours.")
 
-    # 5. ALL 4 STATIONS COMPARISON (2x2 Cards Grid)
-    st.markdown("### 📍 All 4 Kavali Stations Ranked")
-    g1, g2 = st.columns(2)
-    medals = ["🥇", "🥈", "🥉", "#4"]
-    for idx, (_, st_item) in enumerate(recommendations.iterrows()):
-        target_col = g1 if idx % 2 == 0 else g2
-        medal = medals[idx] if idx < len(medals) else f"#{idx+1}"
-        with target_col:
-            st.markdown(f"""
-            <div class="st-card" style="margin-bottom:1rem;">
-                <div class="st-card-title">
-                    <span>{medal} {st_item['station_id']}</span>
-                    <span class="badge" style="background:#f1f5f9; color:#334155;">{st_item['congestion']}</span>
-                </div>
-                <div class="small" style="margin-bottom:0.5rem;">{st_item['station_name']} ({st_item['area']})</div>
-                <div style="font-size:0.88rem; line-height:1.6; color:#334155;">
-                    ⚡ <strong>Power:</strong> {st_item['charger_power_kw']:.1f} kW ({st_item['num_chargers']} plug{'s' if st_item['num_chargers'] > 1 else ''})<br/>
-                    ⏱ <strong>Est. Wait:</strong> {st_item['estimated_wait_min']:.1f} min<br/>
-                    🔋 <strong>Est. Charge:</strong> {st_item['estimated_charge_min']:.1f} min
-                </div>
-                <div class="st-card-time">
-                    Total Turnaround: {st_item['total_time_min']:.0f} min
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    # Technical table in collapsible expander
-    with st.expander("📋 View Full Technical Station Dataframe", expanded=False):
-        display_df = recommendations[
-            [
-                "rank",
-                "station_id",
-                "predicted_energy_kwh",
-                "congestion",
-                "num_chargers",
-                "charger_power_kw",
-                "estimated_wait_min",
-                "estimated_charge_min",
-                "total_time_min"
-            ]
-        ].copy()
-        display_df.columns = [
-            "Rank",
-            "Station",
-            "Predicted Demand (kWh)",
-            "Congestion",
-            "Chargers",
-            "Power (kW)",
-            "Wait (min)",
-            "Charge (min)",
-            "Total Time (min)"
-        ]
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-    # 6. COLLAPSIBLE 24-HOUR FORECAST PREVIEW
+    # 7. 📈 24-HOUR FORECAST PREVIEW EXPANDER
     with st.expander("📈 Quick Preview: 24-Hour City Demand Forecast Curve", expanded=False):
         fig_mini = go.Figure()
         fig_mini.add_trace(go.Scatter(x=fut.timestamp, y=fut.forecast_kwh, mode="lines+markers", name="Hybrid Forecast", line=dict(width=3, color="#00b4d8"), fill="tozeroy"))
-        fig_mini.update_layout(height=300, margin=dict(l=10, r=10, t=25, b=10), xaxis_title="Hour", yaxis_title="Demand (kWh)")
+        fig_mini.update_layout(height=300, margin=dict(l=10, r=10, t=25, b=10), xaxis_title="Hour", yaxis_title="Demand (kWh)", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig_mini, use_container_width=True)
         st.caption("👉 For complete model evaluation, drilldowns, and tables, switch to the **📈 24-Hour Forecast** tab above.")
 
