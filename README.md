@@ -1,4 +1,4 @@
-# BVBR Kavali EV Charging Demand Forecasting
+# Kavali EV Charging Demand Forecasting
 
 ## Run
 
