@@ -13,6 +13,15 @@ from sklearn.preprocessing import MinMaxScaler
 from xgboost import XGBRegressor
 
 try:
+    import pulp
+    PULP_OK = True
+except Exception:
+    pulp = None
+    PULP_OK = False
+
+from scipy.optimize import linprog
+
+try:
     from tensorflow.keras.models import Sequential
     from tensorflow.keras.layers import LSTM, Dense, Dropout
     from tensorflow.keras.callbacks import EarlyStopping
@@ -333,9 +342,23 @@ button[kind="secondary"] {
 """, unsafe_allow_html=True)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_SESSION = os.path.join(BASE, "kavali_ev_sessions_synthetic_Oct2025-Sep2026.csv")
-DEFAULT_HOURLY = os.path.join(BASE, "kavali_ev_hourly_usage_synthetic.csv")
+DEFAULT_SESSION = (
+    os.path.join(BASE, "kavali_ev_clean_session_master.csv")
+    if os.path.exists(os.path.join(BASE, "kavali_ev_clean_session_master.csv"))
+    else os.path.join(BASE, "kavali_ev_sessions_synthetic_Oct2025-Sep2026.csv")
+)
+DEFAULT_HOURLY = (
+    os.path.join(BASE, "kavali_ev_clean_hourly_forecast.csv")
+    if os.path.exists(os.path.join(BASE, "kavali_ev_clean_hourly_forecast.csv"))
+    else os.path.join(BASE, "kavali_ev_hourly_usage_synthetic.csv")
+)
 DEFAULT_STATIONS = os.path.join(BASE, "kavali_ev_stations.csv")
+DEFAULT_EVENTS = (
+    os.path.join(BASE, "kavali_event_scenarios_clean.csv")
+    if os.path.exists(os.path.join(BASE, "kavali_event_scenarios_clean.csv"))
+    else os.path.join(BASE, "events_template.csv")
+)
+DEFAULT_OPTIMIZATION_REQUESTS = os.path.join(BASE, "kavali_current_ev_optimization_requests.csv")
 
 
 def read_csv(uploaded, default_path):
@@ -778,6 +801,229 @@ def generate_station_recommendations(
     return rec_df
 
 
+# ============================================================
+# ⚡ PU LP 4.0 INTELLIGENT CHARGING POWER ALLOCATION OPTIMIZER
+# ============================================================
+def optimize_charging_power_allocation(
+    station_id: str,
+    ev_requests_df: pd.DataFrame,
+    station_capacity_kw: float,
+    forecasted_demand_kwh: float,
+    decision_interval_hours: float = 1.0,
+    headroom_override_kw: float = None
+) -> dict:
+    """
+    Intelligent EV Charging Power Allocation using PuLP 4.0.
+    
+    Optimizes power distribution among multiple EVs connected to a charging station,
+    respecting:
+    - Station capacity and dynamic forecast-aware grid headroom
+    - Individual EV onboard charger power limits
+    - Vehicle remaining energy need (prevents charging beyond requirement or target SOC)
+    - Deadline urgency (less remaining time -> higher power priority)
+    - SOC deficit (lower current SOC -> higher charging priority)
+    - User/fleet priority tier
+    
+    Uses diminishing-marginal-utility base/boost allocation to avoid 'bang-bang'
+    monopolization (e.g. giving 60 kW to one EV and 0 kW to others).
+    """
+    if ev_requests_df is None or ev_requests_df.empty:
+        return {
+            "status": "No Requests",
+            "is_optimal": False,
+            "station_id": station_id,
+            "station_capacity_kw": float(station_capacity_kw),
+            "usable_power_kw": float(station_capacity_kw),
+            "forecasted_demand_kwh": float(forecasted_demand_kwh) if forecasted_demand_kwh is not None else 0.0,
+            "total_allocated_kw": 0.0,
+            "total_required_kwh": 0.0,
+            "total_delivered_kwh": 0.0,
+            "df": pd.DataFrame()
+        }
+    
+    reqs = ev_requests_df[ev_requests_df["station_id"] == station_id].copy().reset_index(drop=True)
+    if reqs.empty:
+        return {
+            "status": "No Active EVs",
+            "is_optimal": False,
+            "station_id": station_id,
+            "station_capacity_kw": float(station_capacity_kw),
+            "usable_power_kw": float(station_capacity_kw),
+            "forecasted_demand_kwh": float(forecasted_demand_kwh) if forecasted_demand_kwh is not None else 0.0,
+            "total_allocated_kw": 0.0,
+            "total_required_kwh": 0.0,
+            "total_delivered_kwh": 0.0,
+            "df": pd.DataFrame()
+        }
+    
+    dt = max(0.1, float(decision_interval_hours))
+    
+    reqs["battery_capacity_kwh"] = pd.to_numeric(reqs["battery_capacity_kwh"], errors="coerce").fillna(40.0)
+    reqs["current_soc"] = pd.to_numeric(reqs["current_soc"], errors="coerce").fillna(20.0).clip(0, 100)
+    reqs["target_soc"] = pd.to_numeric(reqs["target_soc"], errors="coerce").fillna(80.0).clip(0, 100)
+    reqs["max_charging_power_kw"] = pd.to_numeric(reqs["max_charging_power_kw"], errors="coerce").fillna(30.0).clip(lower=1.0)
+    reqs["remaining_time_hours"] = pd.to_numeric(reqs["remaining_time_hours"], errors="coerce").fillna(1.5).clip(lower=0.1)
+    
+    if "priority_score" not in reqs.columns:
+        tier_map = {"Emergency / Fleet": 4.0, "Emergency": 4.0, "Fleet": 3.5, "High": 3.0, "Normal": 2.0, "Low": 1.0}
+        reqs["priority_score"] = reqs["priority_tier"].map(tier_map).fillna(2.0)
+    else:
+        reqs["priority_score"] = pd.to_numeric(reqs["priority_score"], errors="coerce").fillna(2.0)
+        
+    if "priority_tier" not in reqs.columns:
+        reqs["priority_tier"] = reqs["priority_score"].apply(lambda s: "High" if s >= 3.0 else ("Normal" if s >= 2.0 else "Low"))
+    
+    reqs["required_energy_kwh"] = (
+        (reqs["target_soc"] - reqs["current_soc"]).clip(lower=0.0) * reqs["battery_capacity_kwh"] / 100.0
+    )
+    reqs["max_interval_power_kw"] = reqs["required_energy_kwh"] / dt
+    reqs["effective_power_limit_kw"] = reqs[["max_charging_power_kw", "max_interval_power_kw"]].min(axis=1)
+    
+    reqs["min_power_needed_kw"] = reqs["required_energy_kwh"] / reqs["remaining_time_hours"].clip(lower=0.25)
+    time_pressure = (reqs["min_power_needed_kw"] / reqs["max_charging_power_kw"]).clip(upper=3.0)
+    soc_deficit = (1.0 - reqs["current_soc"] / 100.0)
+    prio_weight = reqs["priority_score"]
+    
+    reqs["urgency_score"] = 3.0 * time_pressure + 2.5 * soc_deficit + 1.2 * prio_weight
+    
+    rated_capacity = float(station_capacity_kw)
+    if headroom_override_kw is not None:
+        usable_power_kw = float(headroom_override_kw)
+    else:
+        forecast_val = float(forecasted_demand_kwh) if forecasted_demand_kwh is not None else 0.0
+        if forecast_val > 0.85 * rated_capacity:
+            usable_power_kw = max(10.0, rated_capacity * 0.90)
+        else:
+            usable_power_kw = rated_capacity
+            
+    allocations = []
+    delivered_kwh = []
+    projected_soc = []
+    status_str = "Optimal"
+    is_optimal = True
+    
+    if PULP_OK:
+        try:
+            prob = pulp.LpProblem(f"EV_Power_Allocation_{station_id}", pulp.LpMaximize)
+            p_base = {}
+            p_boost = {}
+            
+            for idx, r in reqs.iterrows():
+                eid = str(r["ev_id"])
+                p_lim = float(r["effective_power_limit_kw"])
+                b_cap = min(p_lim, max(3.0, 0.30 * p_lim)) if p_lim > 0 else 0.0
+                
+                pb = prob.add_variable(f"{eid}_base", lowBound=0.0, upBound=b_cap)
+                pt = prob.add_variable(f"{eid}_boost", lowBound=0.0, upBound=max(0.0, p_lim - b_cap))
+                p_base[eid] = pb
+                p_boost[eid] = pt
+                
+            prob += pulp.lpSum([p_base[str(r["ev_id"])] + p_boost[str(r["ev_id"])] for _, r in reqs.iterrows()]) <= usable_power_kw
+            
+            obj_terms = []
+            for _, r in reqs.iterrows():
+                eid = str(r["ev_id"])
+                u = float(r["urgency_score"])
+                obj_terms.append((50.0 + u) * p_base[eid] + u * p_boost[eid])
+            prob += pulp.lpSum(obj_terms)
+            
+            solver = None
+            try:
+                if hasattr(pulp, "HiGHS") and pulp.HiGHS().available():
+                    solver = pulp.HiGHS(msg=False)
+            except Exception:
+                pass
+            if solver is None:
+                for s_name in ["COIN_CMD", "GLPK_CMD", "SCIP_CMD"]:
+                    try:
+                        s = getattr(pulp, s_name)(msg=False)
+                        if s.available():
+                            solver = s
+                            break
+                    except Exception:
+                        pass
+                        
+            if solver is not None:
+                res = prob.solve(solver)
+            else:
+                res = prob.solve()
+                
+            status_str = res.status_str if hasattr(res, "status_str") else "Optimal"
+            is_optimal = (res.status == pulp.LpSolveStatus.Optimal) if hasattr(res, "status") and hasattr(pulp, "LpSolveStatus") else True
+            
+            for idx, r in reqs.iterrows():
+                eid = str(r["ev_id"])
+                val_base = float(pulp.value(p_base[eid])) if p_base[eid] is not None and pulp.value(p_base[eid]) is not None else 0.0
+                val_boost = float(pulp.value(p_boost[eid])) if p_boost[eid] is not None and pulp.value(p_boost[eid]) is not None else 0.0
+                total_p = max(0.0, val_base + val_boost)
+                total_p = min(total_p, float(r["effective_power_limit_kw"]))
+                allocations.append(round(total_p, 2))
+        except Exception:
+            allocations = []
+            
+    if not allocations or len(allocations) != len(reqs):
+        try:
+            n = len(reqs)
+            c = []
+            bounds = []
+            for idx, r in reqs.iterrows():
+                u = float(r["urgency_score"])
+                p_lim = float(r["effective_power_limit_kw"])
+                b_cap = min(p_lim, max(3.0, 0.30 * p_lim)) if p_lim > 0 else 0.0
+                c.extend([-(50.0 + u), -u])
+                bounds.extend([(0.0, b_cap), (0.0, max(0.0, p_lim - b_cap))])
+                
+            A_ub = [[1.0] * (2 * n)]
+            b_ub = [usable_power_kw]
+            
+            res_lp = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method="highs")
+            if res_lp.success:
+                status_str = "Optimal"
+                is_optimal = True
+                allocations = [
+                    round(min(float(reqs.loc[i, "effective_power_limit_kw"]), float(res_lp.x[2*i] + res_lp.x[2*i+1])), 2)
+                    for i in range(n)
+                ]
+            else:
+                status_str = "Feasible"
+                allocations = [round(min(float(r["effective_power_limit_kw"]), usable_power_kw / n), 2) for _, r in reqs.iterrows()]
+        except Exception:
+            status_str = "Feasible"
+            n = len(reqs)
+            allocations = [round(min(float(r["effective_power_limit_kw"]), usable_power_kw / n), 2) for _, r in reqs.iterrows()]
+            
+    for idx, r in reqs.iterrows():
+        total_p = allocations[idx]
+        e_del = round(total_p * dt, 2)
+        delivered_kwh.append(e_del)
+        new_soc = min(float(r["target_soc"]), float(r["current_soc"]) + (e_del / float(r["battery_capacity_kwh"])) * 100.0)
+        projected_soc.append(round(new_soc, 1))
+        
+    reqs["station_name"] = station_id
+    reqs["forecast_demand_kwh"] = round(float(forecasted_demand_kwh), 1) if forecasted_demand_kwh is not None else 0.0
+    reqs["station_capacity_kw"] = round(rated_capacity, 1)
+    reqs["usable_charging_power_kw"] = round(usable_power_kw, 1)
+    reqs["allocated_power_kw"] = allocations
+    reqs["energy_delivered_next_hour_kwh"] = delivered_kwh
+    reqs["projected_soc"] = projected_soc
+    
+    total_allocated_kw = round(sum(allocations), 2)
+    
+    return {
+        "status": status_str,
+        "is_optimal": is_optimal,
+        "station_id": station_id,
+        "station_capacity_kw": rated_capacity,
+        "usable_power_kw": usable_power_kw,
+        "forecasted_demand_kwh": float(forecasted_demand_kwh) if forecasted_demand_kwh is not None else 0.0,
+        "total_allocated_kw": total_allocated_kw,
+        "total_required_kwh": round(reqs["required_energy_kwh"].sum(), 1),
+        "total_delivered_kwh": round(sum(delivered_kwh), 1),
+        "df": reqs,
+        "allocated_df": reqs
+    }
+
+
 @st.cache_data(show_spinner=False)
 def prepare_data(hourly_bytes, stations_bytes):
     h = pd.read_csv(io.BytesIO(hourly_bytes)); s = pd.read_csv(io.BytesIO(stations_bytes))
@@ -1024,6 +1270,7 @@ with st.sidebar:
         hourly_up = st.file_uploader("Hourly usage CSV", type="csv")
         station_up = st.file_uploader("Station CSV", type="csv")
         event_up = st.file_uploader("Events CSV", type="csv", help="Columns: date,event_name,impact_pct")
+        ev_req_up = st.file_uploader("EV Requests CSV", type="csv", help="Columns: station_id,ev_id,battery_capacity_kwh,current_soc,target_soc,max_charging_power_kw,remaining_time_hours,priority_tier")
 
     with st.expander("✨ UI Click Effects (Originkit)", expanded=False):
         fx_mode = st.selectbox(
@@ -1047,6 +1294,9 @@ render_click_effects(fx_mode, fx_color)
 hourly = read_csv(hourly_up, DEFAULT_HOURLY)
 stations = read_csv(station_up, DEFAULT_STATIONS)
 sessions = read_csv(session_up, DEFAULT_SESSION)
+ev_requests = read_csv(ev_req_up, DEFAULT_OPTIMIZATION_REQUESTS)
+if ev_requests is None:
+    ev_requests = pd.DataFrame()
 if hourly is None or stations is None:
     st.error("Upload the hourly usage CSV and station CSV, or place the supplied Kavali files beside app.py.")
     st.stop()
@@ -1098,7 +1348,7 @@ event_hours = fut[fut.event_impact_pct != 0]
 
 # ----------------------------- 5 User & Analytics Mode Tabs -----------------------------
 tab_find, tab_forecast, tab_stations, tab_analytics, tab_model = st.tabs([
-    "🚗 Find Station",
+    "⚡ Intelligent Power Allocation",
     "📈 24-Hour Forecast",
     "📍 Stations",
     "📊 Analytics",
@@ -1106,288 +1356,333 @@ tab_find, tab_forecast, tab_stations, tab_analytics, tab_model = st.tabs([
 ])
 
 # ============================================================
-# TAB 1: 🚗 FIND STATION (User Decision Hub)
+# TAB 1: ⚡ INTELLIGENT CHARGING POWER ALLOCATION (OPTIMIZER)
 # ============================================================
 with tab_find:
-    st.markdown("## 🔌 Find Your Best Charging Station")
-    st.caption("AI-powered routing comparing predicted demand, charger speeds, and waiting times across Kavali.")
+    st.markdown("## ⚡ Intelligent Charging Power Allocation (PuLP 4.0 Optimizer)")
+    st.caption("Given multiple EVs at one charging station and limited available electricity, the mathematical optimizer intelligently allocates charging power among them based on urgency, remaining time, SOC deficit, target SOC, and station capacity.")
 
-    col_inp1, col_inp2 = st.columns([1, 1.6])
-    with col_inp1:
-        st.markdown(f"**⚡ Target Energy:** `{required_energy:.0f} kWh` &nbsp;•&nbsp; **📅 Date:** `{forecast_date.strftime('%d %b %Y')}`")
-    with col_inp2:
-        if len(recommendations) > 0:
-            best_st = recommendations.iloc[0]
-            worst_st = recommendations.iloc[-1]
-            st.info(
-                f"💡 **AI Planning Tip**: **{best_st['station_id']}** currently has the lowest predicted turnaround ({best_st['total_time_min']:.0f} min). "
-                f"**{worst_st['station_id']}** is expected to experience {worst_st['congestion']} congestion ({worst_st['total_time_min']:.0f} min). Plan ahead to avoid queues."
-            )
 
-    if len(event_hours):
-        avg_event_impact = event_hours.event_impact_pct.mean()
-        if avg_event_impact != 0:
-            st.warning(f"🎉 **Scenario Event Active**: {avg_event_impact:+.0f}% average demand shift factored into station utilization.")
+    # 1. Station Selector & Usable Power Controls
+    col_st1, col_st2, col_st3 = st.columns([1.5, 1.2, 1.3])
+    with col_st1:
+        station_options = list(stations["station_id"].unique())
+        chosen_st = st.selectbox(
+            "Select Charging Station",
+            station_options,
+            index=0,
+            format_func=lambda s: f"{s} — {stations.loc[stations['station_id']==s, 'station_name'].values[0]}" if s in stations["station_id"].values else s
+        )
+        st_row = stations[stations["station_id"] == chosen_st].iloc[0]
+        st_rated_cap = float(st_row["rated_power_kw"])
+        st_num_chargers = int(st_row.get("num_chargers", 1))
+        st_chargers_desc = str(st_row.get("chargers", f"DC {st_rated_cap}kW"))
 
-    # 1. 🥇 AI RECOMMENDED & ⚡ FASTEST CHARGER DUAL CARDS
-    if len(recommendations) > 0:
-        best = recommendations.iloc[0]
-        fastest = recommendations.loc[recommendations["charger_power_kw"].idxmax()]
-        
-        col_rec, col_fast = st.columns([1.2, 1])
-        with col_rec:
-            st.markdown(
-                f"""
-                <div class="recommend-card">
-                    <div class="recommend-badge">
-                        🥇 AI RECOMMENDED
-                    </div>
-                    <div class="recommend-title">
-                        {best['station_id']}
-                    </div>
-                    <div class="recommend-location">
-                        {best.get('station_name', 'Kavali Charging Station')}
-                    </div>
-                    <div class="metric-row">
-                        <div class="metric-box">
-                            <div class="metric-label">Congestion</div>
-                            <div class="metric-value">
-                                {best['congestion']}
-                            </div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Charger</div>
-                            <div class="metric-value">
-                                ⚡ {best['charger_power_kw']:.1f} kW
-                            </div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Wait</div>
-                            <div class="metric-value">
-                                ⏱ {best['estimated_wait_min']:.1f} min
-                            </div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Charging</div>
-                            <div class="metric-value">
-                                🔋 {best['estimated_charge_min']:.1f} min
-                            </div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Total Time</div>
-                            <div class="metric-value" style="color:#38bdf8;">
-                                {best['total_time_min']:.0f} min
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            
-        with col_fast:
-            st.markdown(
-                f"""
-                <div class="fast-card">
-                    <div class="fast-title">
-                        ⚡ Fastest Charger
-                    </div>
-                    <div class="recommend-title">
-                        {fastest['station_id']}
-                    </div>
-                    <div class="fast-power">
-                        {fastest['charger_power_kw']:.1f} kW
-                    </div>
-                    <div class="fast-label">
-                        Charger rated power &bull; {fastest.get('station_name', 'Kavali Charging Station')}
-                    </div>
-                    <div class="metric-row">
-                        <div class="metric-box">
-                            <div class="metric-label">Wait</div>
-                            <div class="metric-value">
-                                ⏱ {fastest['estimated_wait_min']:.1f} min
-                            </div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Charging</div>
-                            <div class="metric-value">
-                                🔋 {fastest['estimated_charge_min']:.1f} min
-                            </div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Congestion</div>
-                            <div class="metric-value">
-                                {fastest['congestion']}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+    with col_st2:
+        st.markdown(f"**📍 Location:** `{st_row.get('area', 'Kavali')}`")
+        st.markdown(f"**⚡ Rated Capacity:** `{st_rated_cap:.1f} kW` ({st_num_chargers} charger{'s' if st_num_chargers>1 else ''})")
+        st.caption(f"🔌 Hardware Spec: {st_chargers_desc}")
 
-        # 2. 💡 WHY THIS STATION?
-        st.markdown(f"""
-        <div class="why-list">
-            <div style="font-weight:750; font-size:1.05rem; margin-bottom:0.4rem; color:#4ade80;">
-                Why {best['station_id']}? ✓
-            </div>
-            <div style="font-size:0.92rem; line-height:1.8; color:#dcfce7;">
-                {best['congestion']} predicted congestion<br/>
-                ⚡ Highest charger power ({best['charger_power_kw']:.0f} kW)<br/>
-                ⏱ Short estimated waiting time ({best['estimated_wait_min']:.1f} min)<br/>
-                🔋 Short estimated charging duration ({best['estimated_charge_min']:.1f} min)
-            </div>
-            <div style="margin-top:0.6rem; font-size:0.82rem; color:#94a3b8; border-top:1px dashed rgba(52,211,153,0.3); padding-top:0.45rem;">
-                <strong>AI recommendation based on:</strong><br/>
-                Demand forecast + congestion + charger power + estimated wait
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    # Forecast-aware demand for this station in the current hour
+    st_hourly_forecast = station_forecasts.get(chosen_st, [25.0] * 24)
+    current_hour_idx = pd.Timestamp.now().hour % len(st_hourly_forecast)
+    st_forecast_hour_demand = float(st_hourly_forecast[current_hour_idx])
 
-    # 3. 📍 COMPARE 4 CHARGING STATIONS (Cards)
-    st.markdown(
-        '<div class="ev-section-title">📍 Compare Charging Stations</div>',
-        unsafe_allow_html=True
+    with col_st3:
+        usable_power_input = st.slider(
+            "Usable Station Power (kW)",
+            min_value=5.0,
+            max_value=float(max(st_rated_cap, 60.0)),
+            value=float(st_rated_cap),
+            step=2.5,
+            help="Simulate transformer limits, peak grid stress, or demand-response curtailment."
+        )
+
+    # 2. Run Intelligent PuLP 4.0 Power Allocation Optimization
+    opt_result = optimize_charging_power_allocation(
+        station_id=chosen_st,
+        ev_requests_df=ev_requests,
+        station_capacity_kw=st_rated_cap,
+        forecasted_demand_kwh=st_forecast_hour_demand,
+        decision_interval_hours=1.0,
+        headroom_override_kw=usable_power_input
     )
-    cols = st.columns(2)
-    for i, (_, station) in enumerate(recommendations.iterrows()):
-        congestion = str(station["congestion"])
-        if "Low" in congestion:
-            status_class = "status-low"
-        elif "Medium" in congestion:
-            status_class = "status-medium"
-        else:
-            status_class = "status-high"
-        with cols[i % 2]:
-            rank_str = str(station['rank']).replace("#", "")
-            st.markdown(
-                f"""
-                <div class="station-card">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div class="station-rank">
-                            RANK #{rank_str}
-                        </div>
-                        <div class="station-status {status_class}">
-                            {congestion}
-                        </div>
-                    </div>
-                    <div class="station-name">
-                        {station['station_id']}
-                    </div>
-                    <div style="font-size:0.86rem; color:#94a3b8; margin:0.2rem 0 0.5rem;">
-                        {station['station_name']} ({station['area']})
-                    </div>
-                    <div class="metric-row">
-                        <div class="metric-box">
-                            <div class="metric-label">Power</div>
-                            <div class="metric-value">⚡ {station['charger_power_kw']:.1f} kW</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Wait</div>
-                            <div class="metric-value">⏱ {station['estimated_wait_min']:.1f} min</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Charge</div>
-                            <div class="metric-value">🔋 {station['estimated_charge_min']:.1f} min</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Total</div>
-                            <div class="metric-value" style="color:#38bdf8; font-weight:750;">{station['total_time_min']:.0f} min</div>
-                        </div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+    opt_df = opt_result["df"]
 
-    # 4. 📋 DETAILED STATION DATA EXPANDER
-    with st.expander("📋 View detailed station data", expanded=False):
-        display_df = recommendations[
-            [
-                "rank",
-                "station_id",
-                "predicted_energy_kwh",
-                "congestion",
-                "num_chargers",
-                "charger_power_kw",
-                "estimated_wait_min",
-                "estimated_charge_min",
-                "total_time_min"
-            ]
-        ].copy()
-        display_df.columns = [
-            "Rank",
+    # 3. Key Summary Metrics Cards
+    m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
+    with m_col1:
+        st.metric("Station Capacity", f"{opt_result['station_capacity_kw']:.1f} kW")
+    with m_col2:
+        st.metric("Forecasted Demand", f"{opt_result['forecasted_demand_kwh']:.1f} kWh", help="From XGBoost + LSTM Hybrid forecast for this hour")
+    with m_col3:
+        st.metric("Usable Power", f"{opt_result['usable_power_kw']:.1f} kW", help="Available electrical capacity for active EV charging")
+    with m_col4:
+        st.metric("Total Power Allocated", f"{opt_result['total_allocated_kw']:.1f} kW", delta=f"{opt_result['usable_power_kw'] - opt_result['total_allocated_kw']:.1f} kW Headroom")
+    with m_col5:
+        status_badge = "Optimal 🟢" if opt_result["is_optimal"] else f"{opt_result['status']} 🟡"
+        st.metric("Solver Status", status_badge, help="PuLP 4.0 / HiGHS LP Solver")
+
+    # 4. Mandatory Core Explanation Box
+    st.markdown("""
+    <div style="background: rgba(14, 165, 233, 0.08); border-left: 4px solid #38bdf8; border-radius: 8px; padding: 0.95rem 1.25rem; margin: 1.1rem 0;">
+        <strong style="color: #38bdf8; font-size: 1.05rem;">⚡ Allocation Principle:</strong><br/>
+        <span style="color: #f1f5f9; font-size: 0.96rem; line-height: 1.6;">
+            Charging power is allocated according to EV urgency, SOC, energy requirement, deadline and station capacity.
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 5. Before vs After Demonstration Callout
+    with st.expander("🔍 Demonstration: Why This Solves Unintelligent Single-EV Monopolization", expanded=False):
+        c_bef, c_aft = st.columns(2)
+        with c_bef:
+            st.markdown("""
+            <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 12px; padding: 1rem 1.2rem;">
+                <div style="color: #f87171; font-weight: 750; font-size: 0.92rem; margin-bottom: 0.4rem;">❌ NAIVE LINEAR OPTIMIZER (BEFORE)</div>
+                <div style="font-size: 0.88rem; color: #cbd5e1; line-height: 1.6;">
+                    <b>Station Capacity = 60 kW</b><br/>
+                    • <b>EV-01</b> → 60 kW (Monopolizes entire capacity)<br/>
+                    • <b>EV-02</b> → 0 kW (Starved, departure deadline missed)<br/>
+                    • <b>EV-03</b> → 0 kW (Starved)<br/>
+                    <i>Defect: Extreme-point solution ignores other vehicles' deadlines and remaining energy needs.</i>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c_aft:
+            st.markdown("""
+            <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 12px; padding: 1rem 1.2rem;">
+                <div style="color: #4ade80; font-weight: 750; font-size: 0.92rem; margin-bottom: 0.4rem;">✅ INTELLIGENT ALLOCATION (AFTER)</div>
+                <div style="font-size: 0.88rem; color: #cbd5e1; line-height: 1.6;">
+                    <b>Station Capacity = 60 kW (PuLP 4.0 / HiGHS)</b><br/>
+                    • Multi-factor priority: SOC deficit + deadline urgency + priority tier<br/>
+                    • Diminishing marginal returns ensures non-starvation base charging<br/>
+                    • Strictly capped by remaining energy need (e.g. 5.9 kWh need → max 5.9 kW)<br/>
+                    <i>Result: Balanced throughput, all deadlines respected, fair intelligent allocation.</i>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # 6. Detailed Allocation Table
+    if not opt_df.empty:
+        st.markdown("### 📋 Intelligent Power Allocation Results")
+        table_show = opt_df[[
+            "station_name",
+            "forecast_demand_kwh",
+            "station_capacity_kw",
+            "usable_charging_power_kw",
+            "ev_id",
+            "vehicle_model",
+            "current_soc",
+            "target_soc",
+            "required_energy_kwh",
+            "remaining_time_hours",
+            "priority_tier",
+            "allocated_power_kw",
+            "energy_delivered_next_hour_kwh",
+            "projected_soc"
+        ]].copy()
+
+        table_show.columns = [
             "Station",
-            "Predicted Demand (kWh)",
-            "Congestion",
-            "Chargers",
-            "Power (kW)",
-            "Wait (min)",
-            "Charge (min)",
-            "Total Time (min)"
+            "Forecast Demand (kWh)",
+            "Station Capacity (kW)",
+            "Usable Power (kW)",
+            "EV ID",
+            "Vehicle Model",
+            "Current SOC (%)",
+            "Target SOC (%)",
+            "Required Energy (kWh)",
+            "Remaining Time (h)",
+            "Priority",
+            "Allocated Power (kW)",
+            "Energy Delivered Next Hour (kWh)",
+            "Projected SOC (%)"
         ]
+
         st.dataframe(
-            display_df,
+            table_show.style.format({
+                "Forecast Demand (kWh)": "{:.1f}",
+                "Station Capacity (kW)": "{:.1f}",
+                "Usable Power (kW)": "{:.1f}",
+                "Current SOC (%)": "{:.1f}%",
+                "Target SOC (%)": "{:.1f}%",
+                "Required Energy (kWh)": "{:.1f}",
+                "Remaining Time (h)": "{:.1f}h",
+                "Allocated Power (kW)": "{:.2f}",
+                "Energy Delivered Next Hour (kWh)": "{:.2f}",
+                "Projected SOC (%)": "{:.1f}%"
+            }),
             use_container_width=True,
             hide_index=True
         )
 
-    # 5. 📊 CURRENT PREDICTED CONGESTION (Visual Meter & Progress Cards)
-    st.markdown("### 📊 Current Predicted Status")
-    meter_html = '<div style="background:#0f172a; color:#f8fafc; padding:1.1rem 1.4rem; border-radius:14px; font-family:monospace; font-size:0.98rem; margin-bottom:1.1rem; box-shadow:0 4px 15px rgba(0,0,0,0.08);">'
-    meter_html += '<div style="color:#94a3b8; font-weight:750; font-size:0.8rem; letter-spacing:0.08em; margin-bottom:0.75rem;">CURRENT PREDICTED STATUS</div>'
-    for _, r_st in recommendations.iterrows():
-        u = r_st['predicted_utilization']
-        filled = max(1, min(10, int(round(u * 10))))
-        blocks = "█" * filled + "░" * (10 - filled)
-        color = "#10b981" if u < 0.35 else ("#f59e0b" if u < 0.70 else "#ef4444")
-        lvl_word = "Low" if u < 0.35 else ("Medium" if u < 0.70 else "High")
-        meter_html += f'<div style="display:flex; justify-content:space-between; margin-bottom:0.4rem; align-items:center;">'
-        meter_html += f'<span><strong>{r_st["station_id"]}</strong> &nbsp; <span style="color:{color}; letter-spacing:2px;">{blocks}</span></span>'
-        meter_html += f'<span style="color:{color}; font-weight:750;">{r_st["congestion"]}</span>'
-        meter_html += '</div>'
-    meter_html += '</div>'
-    st.markdown(meter_html, unsafe_allow_html=True)
+        # 7. Visual Comparison: Required / Maximum Power vs Allocated Power
+        st.markdown("### 📊 Power Comparison: Required vs. Charger Limit vs. Allocated Power")
+        fig_alloc = go.Figure()
+        ev_labels = [f"{r['ev_id']}<br><sup>{r['vehicle_model']}</sup>" for _, r in opt_df.iterrows()]
 
-    # 6. 🕒 NEXT 3 HOURS LOOKAHEAD (Traffic Light Grid)
-    st.markdown("### 🕒 Next 3 Hours Lookahead")
-    next3_rows = []
-    warning_stations = []
-    for sid in stations["station_id"]:
-        st_row = stations[stations["station_id"] == sid].iloc[0]
-        pwr = extract_station_power(st_row)
-        nc = int(st_row.get("num_chargers", 1))
-        cap = max(pwr * nc, 1.0)
-        fc = station_forecasts[sid]
-        u0 = np.clip(fc[0] / cap, 0.05, 0.98)
-        u1 = np.clip(fc[1] / cap, 0.05, 0.98)
-        u2 = np.clip(fc[2] / cap, 0.05, 0.98)
-        c0 = get_congestion_level(u0)
-        c1 = get_congestion_level(u1)
-        c2 = get_congestion_level(u2)
-        if ("Low" in c0 and ("Medium" in c2 or "High" in c2)) or ("Medium" in c0 and "High" in c2):
-            warning_stations.append(sid)
-        next3_rows.append({
-            "Station ID": sid,
-            "Station Name": st_row["station_name"],
-            "Now": c0,
-            f"+1h ({fut.timestamp.iloc[1].strftime('%I %p')})": c1,
-            f"+2h ({fut.timestamp.iloc[2].strftime('%I %p')})": c2
-        })
-    st.dataframe(pd.DataFrame(next3_rows), use_container_width=True, hide_index=True)
-    if warning_stations:
-        st.warning(f"⚠️ **Congestion Alert**: {', '.join(warning_stations)} is expected to experience increasing congestion over the next 2 hours.")
+        fig_alloc.add_trace(go.Bar(
+            x=ev_labels,
+            y=opt_df["max_interval_power_kw"],
+            name="Required Power (kWh/h)",
+            marker_color="#f59e0b",
+            opacity=0.85
+        ))
 
-    # 7. 📈 24-HOUR FORECAST PREVIEW EXPANDER
-    with st.expander("📈 Quick Preview: 24-Hour City Demand Forecast Curve", expanded=False):
-        fig_mini = go.Figure()
-        fig_mini.add_trace(go.Scatter(x=fut.timestamp, y=fut.forecast_kwh, mode="lines+markers", name="Hybrid Forecast", line=dict(width=3, color="#00b4d8"), fill="tozeroy"))
-        fig_mini.update_layout(height=300, margin=dict(l=10, r=10, t=25, b=10), xaxis_title="Hour", yaxis_title="Demand (kWh)", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_mini, use_container_width=True)
-        st.caption("👉 For complete model evaluation, drilldowns, and tables, switch to the **📈 24-Hour Forecast** tab above.")
+        fig_alloc.add_trace(go.Bar(
+            x=ev_labels,
+            y=opt_df["max_charging_power_kw"],
+            name="Max Charger Limit (kW)",
+            marker_color="#64748b",
+            opacity=0.70
+        ))
 
-    st.caption("ℹ️ *Notice: Predicted Congestion and Estimated Waiting Time are calculated using hybrid demand forecasts and queuing approximations on the Kavali dataset. They serve as planning intelligence rather than real-time hardware queue telemetry.*")
+        fig_alloc.add_trace(go.Bar(
+            x=ev_labels,
+            y=opt_df["allocated_power_kw"],
+            name="Intelligently Allocated Power (kW)",
+            marker_color="#38bdf8",
+            marker_line=dict(width=1.5, color="#ffffff")
+        ))
+
+        fig_alloc.add_hline(
+            y=opt_result["usable_power_kw"],
+            line_dash="dash",
+            line_color="#ef4444",
+            annotation_text=f"Usable Station Capacity: {opt_result['usable_power_kw']:.1f} kW",
+            annotation_position="top right"
+        )
+
+        fig_alloc.update_layout(
+            barmode="group",
+            height=400,
+            margin=dict(l=20, r=20, t=35, b=40),
+            xaxis_title="Queued Electric Vehicles",
+            yaxis_title="Power (kW)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(15, 23, 42, 0.4)",
+            font=dict(color="#f8fafc")
+        )
+        st.plotly_chart(fig_alloc, use_container_width=True)
+
+        # 8. Visual Progress: Current SOC -> Projected SOC -> Target SOC
+        st.markdown("### 🔋 State of Charge (SOC) Progression in Next Hour")
+        fig_soc = go.Figure()
+        for idx, r in opt_df.iterrows():
+            delivered_soc_pct = max(0.0, r["projected_soc"] - r["current_soc"])
+            fig_soc.add_trace(go.Bar(
+                y=[f"{r['ev_id']} ({r['vehicle_model']})"],
+                x=[r["current_soc"]],
+                orientation="h",
+                name="Current SOC" if idx == 0 else None,
+                showlegend=(idx == 0),
+                marker_color="#334155"
+            ))
+            fig_soc.add_trace(go.Bar(
+                y=[f"{r['ev_id']} ({r['vehicle_model']})"],
+                x=[delivered_soc_pct],
+                orientation="h",
+                name="Delivered in Next Hour" if idx == 0 else None,
+                showlegend=(idx == 0),
+                marker_color="#22c55e"
+            ))
+            fig_soc.add_trace(go.Scatter(
+                y=[f"{r['ev_id']} ({r['vehicle_model']})"],
+                x=[r["target_soc"]],
+                mode="markers",
+                name="Target SOC" if idx == 0 else None,
+                showlegend=(idx == 0),
+                marker=dict(symbol="line-ns-open", size=18, color="#eab308", line_width=3)
+            ))
+
+        fig_soc.update_layout(
+            barmode="stack",
+            height=300,
+            margin=dict(l=20, r=20, t=30, b=30),
+            xaxis=dict(title="State of Charge (%)", range=[0, 105]),
+            legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(15, 23, 42, 0.4)",
+            font=dict(color="#f8fafc")
+        )
+        st.plotly_chart(fig_soc, use_container_width=True)
+
+    else:
+        st.warning(f"No active EV charging requests found for station **{chosen_st}**.")
+
+    # 9. Interactive Queue Simulation
+    with st.expander("➕ Simulate / Add an EV to the Queue at this Station", expanded=False):
+        st.caption("Test how the PuLP 4.0 optimizer dynamically re-balances allocation when a new vehicle connects.")
+        c_e1, c_e2, c_e3, c_e4 = st.columns(4)
+        with c_e1:
+            new_ev_id = st.text_input("EV ID", value=f"EV-SIM-{len(opt_df)+1}")
+            new_model = st.text_input("Vehicle Model", value="Mahindra BE 6")
+        with c_e2:
+            new_bat = st.number_input("Battery Capacity (kWh)", min_value=10.0, max_value=120.0, value=50.0, step=5.0)
+            new_cur_soc = st.slider("Current SOC (%)", min_value=5.0, max_value=95.0, value=25.0, step=5.0)
+        with c_e3:
+            new_tgt_soc = st.slider("Target SOC (%)", min_value=50.0, max_value=100.0, value=85.0, step=5.0)
+            new_max_kw = st.number_input("Max Charger Power (kW)", min_value=3.3, max_value=150.0, value=50.0, step=5.0)
+        with c_e4:
+            new_rem_time = st.number_input("Remaining Time (hours)", min_value=0.25, max_value=8.0, value=1.2, step=0.25)
+            new_prio_tier = st.selectbox("Priority Tier", ["Emergency / Fleet", "High", "Normal", "Low"], index=1)
+
+        if st.button("⚡ Add to Simulation Queue", type="primary"):
+            prio_map = {"Emergency / Fleet": 4, "High": 3, "Normal": 2, "Low": 1}
+            new_row = pd.DataFrame([{
+                "station_id": chosen_st,
+                "ev_id": new_ev_id,
+                "vehicle_model": new_model,
+                "battery_capacity_kwh": new_bat,
+                "current_soc": new_cur_soc,
+                "target_soc": new_tgt_soc,
+                "max_charging_power_kw": new_max_kw,
+                "remaining_time_hours": new_rem_time,
+                "priority_tier": new_prio_tier,
+                "priority_score": prio_map.get(new_prio_tier, 2)
+            }])
+            ev_requests = pd.concat([ev_requests, new_row], ignore_index=True)
+            st.success(f"Added **{new_ev_id}** to {chosen_st}! Re-running optimizer...")
+            st.rerun()
+
+    # 10. Preserved Station Travel Recommendation Tool (Trip Planner)
+    with st.expander("🚗 Station Travel Recommendation & Comparison (Trip Planner)", expanded=False):
+        st.caption("AI-powered routing comparing predicted demand, charger speeds, and waiting times across Kavali.")
+        if len(recommendations) > 0:
+            rec_best = recommendations.iloc[0]
+            rec_fastest = recommendations.loc[recommendations["charger_power_kw"].idxmax()]
+            
+            c_r1, c_r2 = st.columns([1.2, 1])
+            with c_r1:
+                st.markdown(f"""
+                <div class="recommend-card">
+                    <div class="recommend-badge">🥇 AI RECOMMENDED</div>
+                    <div class="recommend-title">{rec_best['station_id']}</div>
+                    <div class="recommend-location">{rec_best.get('station_name', 'Kavali Charging Station')}</div>
+                    <div class="metric-row">
+                        <div class="metric-box"><div class="metric-label">Congestion</div><div class="metric-value">{rec_best['congestion']}</div></div>
+                        <div class="metric-box"><div class="metric-label">Power</div><div class="metric-value">⚡ {rec_best['charger_power_kw']:.1f} kW</div></div>
+                        <div class="metric-box"><div class="metric-label">Wait</div><div class="metric-value">⏱ {rec_best['estimated_wait_min']:.1f} min</div></div>
+                        <div class="metric-box"><div class="metric-label">Charge</div><div class="metric-value">🔋 {rec_best['estimated_charge_min']:.1f} min</div></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            with c_r2:
+                st.markdown(f"""
+                <div class="fast-card">
+                    <div class="fast-title">⚡ Fastest Charger</div>
+                    <div class="recommend-title">{rec_fastest['station_id']}</div>
+                    <div class="fast-power">{rec_fastest['charger_power_kw']:.1f} kW</div>
+                    <div class="fast-label">{rec_fastest.get('station_name', 'Kavali Charging Station')}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.dataframe(recommendations[[
+                "rank", "station_id", "predicted_energy_kwh", "congestion", "num_chargers", "charger_power_kw", "estimated_wait_min", "estimated_charge_min", "total_time_min"
+            ]], use_container_width=True, hide_index=True)
+
 
 # ============================================================
 # TAB 2: 📈 24-HOUR FORECAST

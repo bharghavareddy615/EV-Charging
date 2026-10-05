@@ -1,0 +1,14 @@
+station_id,ev_id,vehicle_model,battery_capacity_kwh,current_soc,target_soc,max_charging_power_kw,remaining_time_hours,priority_tier,priority_score
+KVL-01,EV-01,Tata Nexon EV,40.5,18.0,80.0,50.0,0.9,High,3
+KVL-01,EV-02,MG ZS EV,50.3,34.0,85.0,60.0,1.4,Normal,2
+KVL-01,EV-03,Mahindra XUV400,39.4,65.0,80.0,30.0,2.0,Normal,1
+KVL-01,EV-04,Hyundai Ioniq 5,72.6,15.0,85.0,60.0,2.2,Emergency / Fleet,4
+KVL-01,EV-05,BYD Atto 3,60.5,50.0,80.0,30.0,1.2,Normal,2
+KVL-02,EV-06,Tata Tiago EV,24.0,20.0,80.0,7.4,1.8,High,3
+KVL-02,EV-07,Citroen eC3,29.2,40.0,85.0,7.4,2.5,Normal,2
+KVL-02,EV-08,Tata Punch EV,35.0,60.0,80.0,7.4,3.0,Normal,1
+KVL-03,EV-09,Tata Nexon EV Max,40.5,12.0,85.0,30.0,0.8,Emergency / Fleet,4
+KVL-03,EV-10,Kia EV6,77.4,28.0,80.0,30.0,1.5,High,3
+KVL-03,EV-11,MG Windsor EV,38.0,55.0,80.0,30.0,2.0,Normal,1
+KVL-04,EV-12,Ather 450X,3.7,15.0,90.0,3.3,1.0,High,3
+KVL-04,EV-13,Ola S1 Pro,4.0,35.0,85.0,3.3,1.5,Normal,2
