@@ -475,8 +475,17 @@ def render_click_effects(interaction_mode="sniper", color="#00b4d8"):
     <script>
     (function() {{
         try {{
-            var doc = window.parent.document || document;
-            var win = window.parent || window;
+            var doc = document;
+            var win = window;
+            try {{
+                if (window.parent && window.parent.document) {{
+                    doc = window.parent.document;
+                    win = window.parent;
+                }}
+            }} catch(e) {{
+                doc = document;
+                win = window;
+            }}
             
             var existingContainer = doc.getElementById('originkit-click-effects');
             if (existingContainer) existingContainer.remove();
@@ -793,7 +802,7 @@ def xgb_train_cached(train_bytes, features):
     ).fillna(0)
     y = train["energy_kwh"].astype(float)
     model = XGBRegressor(
-        n_estimators=420,
+        n_estimators=120,
         max_depth=6,
         learning_rate=0.045,
         subsample=0.85,
@@ -827,10 +836,12 @@ def make_lstm_sequences(df, feature_cols, target_col, lookback):
 
 
 @st.cache_resource(show_spinner=False)
-def lstm_train_cached(train_bytes, feature_cols, lookback=48, epochs=8):
+def lstm_train_cached(train_bytes, feature_cols, lookback=48, epochs=4):
     if not TF_OK:
         return None
     base = pd.read_pickle(io.BytesIO(train_bytes))
+    if len(base) > 2160:
+        base = base.tail(2160)
     X, Y, scaler_x, scaler_y = make_lstm_sequences(
         base,
         list(feature_cols),
@@ -859,17 +870,24 @@ def lstm_train_cached(train_bytes, feature_cols, lookback=48, epochs=8):
 
 
 def build_lstm(input_shape):
-    model = Sequential([
-        LSTM(
-            32,
-            return_sequences=True,
-            input_shape=input_shape
-        ),
-        Dropout(0.12),
-        LSTM(16),
-        Dense(8, activation="relu"),
-        Dense(1)
-    ])
+    try:
+        from tensorflow.keras.layers import Input
+        model = Sequential([
+            Input(shape=input_shape),
+            LSTM(32, return_sequences=True),
+            Dropout(0.12),
+            LSTM(16),
+            Dense(8, activation="relu"),
+            Dense(1)
+        ])
+    except Exception:
+        model = Sequential([
+            LSTM(32, return_sequences=True, input_shape=input_shape),
+            Dropout(0.12),
+            LSTM(16),
+            Dense(8, activation="relu"),
+            Dense(1)
+        ])
     model.compile(
         optimizer="adam",
         loss="mse"
@@ -931,7 +949,7 @@ def lstm_fit_forecast(
     future,
     feature_cols,
     lookback=48,
-    epochs=8
+    epochs=4
 ):
     if not TF_OK:
         return None, None
@@ -965,13 +983,19 @@ def lstm_fit_forecast(
     return model, np.array(predictions)
 
 
+@st.cache_data(show_spinner=False)
+def validation_scores_cached(train_bytes, features, lookback=48):
+    city = pd.read_pickle(io.BytesIO(train_bytes))
+    cutoff = city.timestamp.max() - pd.Timedelta(days=7)
+    tr = city[city.timestamp < cutoff].copy()
+    va = city[city.timestamp >= cutoff].copy()
+    model = xgb_train(tr, features)
+    px = model.predict(va[list(features)].replace([np.inf, -np.inf], np.nan).fillna(0))
+    return {"XGBoost MAE": mean_absolute_error(va.energy_kwh, px), "XGBoost RMSE": rmse(va.energy_kwh, px), "XGBoost MAPE": mape(va.energy_kwh, px)}, va, px
+
+
 def validation_scores(city, features, lookback=48):
-    # Last 7 complete days as holdout.
-    cutoff=city.timestamp.max()-pd.Timedelta(days=7)
-    tr=city[city.timestamp < cutoff].copy(); va=city[city.timestamp >= cutoff].copy()
-    model=xgb_train(tr,features)
-    px=model.predict(va[features].replace([np.inf,-np.inf],np.nan).fillna(0))
-    return {"XGBoost MAE":mean_absolute_error(va.energy_kwh,px),"XGBoost RMSE":rmse(va.energy_kwh,px),"XGBoost MAPE":mape(va.energy_kwh,px)}, va, px
+    return validation_scores_cached(_pickle_bytes(city), tuple(features), lookback)
 
 
 # ----------------------------- App -----------------------------
@@ -1060,7 +1084,7 @@ with st.spinner("⚡ Computing AI demand forecast & station status..."):
         xgb_pred.append(prediction)
         work = pd.concat([work, pd.DataFrame([{**r, "energy_kwh": prediction}])], ignore_index=True)
     fut["xgb_pred_kwh"] = xgb_pred
-    lstm_model, lstm_pred = lstm_fit_forecast(city, fut, FEATURES, lookback=48, epochs=8)
+    lstm_model, lstm_pred = lstm_fit_forecast(city, fut, FEATURES, lookback=48, epochs=4)
     if lstm_pred is None:
         fut["lstm_pred_kwh"] = fut.xgb_pred_kwh.values
     else:
